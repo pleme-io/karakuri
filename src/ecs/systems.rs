@@ -45,7 +45,7 @@ use crate::platform::{PlatformCallbacks, WorkspaceId};
 /// * `broken_notifications` - A mutable `ResMut` for the `PollForNotifications` resource, used to manage polling state.
 /// * `commands` - Bevy commands to trigger events or insert resources.
 #[allow(clippy::needless_pass_by_value)]
-pub(super) fn dispatch_toplevel_triggers(
+pub(crate) fn dispatch_toplevel_triggers(
     mut messages: MessageReader<Event>,
     broken_notifications: Option<Res<PollForNotifications>>,
     mut commands: Commands,
@@ -313,7 +313,7 @@ pub(crate) fn finish_setup(
 /// * `process_query` - A `Populated` query for `(Entity, &mut BProcess, Has<Children>)` with `With<FreshMarker>`.
 /// * `commands` - Bevy commands to spawn entities and manage components.
 #[allow(clippy::needless_pass_by_value)]
-pub(super) fn add_launched_process(
+pub(crate) fn add_launched_process(
     window_manager: Res<WindowManager>,
     fresh_processes: Populated<(Entity, &mut BProcess, Has<Children>), With<FreshMarker>>,
     mut commands: Commands,
@@ -368,7 +368,7 @@ pub(super) fn add_launched_process(
 /// * `windows` - A query for all `Window` components, used to check for existing windows.
 /// * `commands` - Bevy commands to spawn entities and manage components.
 #[allow(clippy::needless_pass_by_value)]
-pub(super) fn add_launched_application(
+pub(crate) fn add_launched_application(
     app_query: Populated<(&mut Application, Entity), With<FreshMarker>>,
     windows: Windows,
     mut commands: Commands,
@@ -400,7 +400,7 @@ pub(super) fn add_launched_application(
 /// * `cleanup` - A `Populated` query for `(Entity, Has<FreshMarker>, &Timeout)` components, targeting `BProcess` or `Application` entities.
 /// * `commands` - Bevy commands to remove components.
 #[allow(clippy::type_complexity)]
-pub(super) fn fresh_marker_cleanup(
+pub(crate) fn fresh_marker_cleanup(
     cleanup: Populated<
         (Entity, Has<FreshMarker>, &Timeout),
         Or<(With<BProcess>, With<Application>)>,
@@ -424,7 +424,7 @@ pub(super) fn fresh_marker_cleanup(
 /// * `clock` - The Bevy `Time` resource for getting the delta time.
 /// * `commands` - Bevy commands to despawn entities.
 #[allow(clippy::needless_pass_by_value)]
-pub(super) fn timeout_ticker(
+pub(crate) fn timeout_ticker(
     timers: Populated<(Entity, &mut Timeout)>,
     clock: Res<Time>,
     mut commands: Commands,
@@ -454,7 +454,7 @@ pub(super) fn timeout_ticker(
 /// * `active_display` - A mutable `ActiveDisplayMut` system parameter for the currently active display.
 /// * `commands` - Bevy commands to despawn entities.
 #[allow(clippy::needless_pass_by_value)]
-pub(super) fn find_orphaned_workspaces(
+pub(crate) fn find_orphaned_workspaces(
     orphans: Populated<(&LayoutStrip, Entity), Without<ChildOf>>,
     workspaces: Populated<(&LayoutStrip, Entity, &ChildOf), With<ChildOf>>,
     windows: Windows,
@@ -557,7 +557,7 @@ pub(super) fn find_orphaned_workspaces(
 /// * `throttle` - A `ThrottledSystem` to control the execution rate of this system.
 /// * `commands` - Bevy commands to trigger `WMEventTrigger` events for display changes.
 #[allow(clippy::needless_pass_by_value)]
-pub(super) fn display_changes_watcher(
+pub(crate) fn display_changes_watcher(
     displays: Query<(&Display, Has<ActiveDisplayMarker>)>,
     window_manager: Res<WindowManager>,
     mut commands: Commands,
@@ -608,7 +608,7 @@ pub(super) fn display_changes_watcher(
 /// * `current_space` - A `Local` resource storing the ID of the currently observed space.
 /// * `commands` - Bevy commands to trigger `WMEventTrigger` events for space changes.
 #[allow(clippy::needless_pass_by_value)]
-pub(super) fn workspace_change_watcher(
+pub(crate) fn workspace_change_watcher(
     active_display: ActiveDisplay,
     window_manager: Res<WindowManager>,
     mut current_space: Local<WorkspaceId>,
@@ -644,7 +644,7 @@ pub(super) fn workspace_change_watcher(
 /// * `commands` - Bevy commands to remove the `RepositionMarker` when animation is complete.
 #[allow(clippy::needless_pass_by_value)]
 #[instrument(level = Level::TRACE, skip_all)]
-pub(super) fn animate_windows(
+pub(crate) fn animate_windows(
     windows: Populated<(&mut Window, Entity, &RepositionMarker)>,
     displays: Query<&Display>,
     swipe_tracker: SmoothSwipeTracking,
@@ -697,7 +697,7 @@ pub(super) fn animate_windows(
 /// * `commands` - Bevy commands to remove the `ResizeMarker` when resizing is complete.
 #[allow(clippy::needless_pass_by_value)]
 #[instrument(level = Level::TRACE, skip_all)]
-pub(super) fn animate_resize_windows(
+pub(crate) fn animate_resize_windows(
     windows: Populated<(&mut Window, Entity, &ResizeMarker, Has<RepositionMarker>)>,
     displays: Query<&Display>,
     time: Res<Time>,
@@ -741,7 +741,7 @@ pub(super) fn animate_resize_windows(
 }
 
 #[allow(clippy::needless_pass_by_value)]
-pub(super) fn window_swiper(
+pub(crate) fn window_swiper(
     sliding: Populated<(Entity, Has<Unmanaged>, &WindowSwipeMarker)>,
     windows: Query<(&Window, Option<&RepositionMarker>, Option<&ResizeMarker>)>,
     active_display: ActiveDisplay,
@@ -852,7 +852,7 @@ pub(super) fn window_swiper(
 /// commits all window positions via AX, strips stale markers, and removes
 /// `SwipeActive`.
 #[allow(clippy::needless_pass_by_value, clippy::too_many_arguments)]
-pub(super) fn swipe_idle_tracker(
+pub(crate) fn swipe_idle_tracker(
     mut swipe: SmoothSwipeTracking,
     active_display: ActiveDisplay,
     windows: Query<(&Window, Option<&RepositionMarker>, Option<&ResizeMarker>)>,
@@ -983,7 +983,7 @@ fn expose_window(
 
 #[allow(clippy::needless_pass_by_value)]
 #[instrument(level = Level::DEBUG, skip_all)]
-pub(super) fn reshuffle_layout_strip(
+pub(crate) fn reshuffle_layout_strip(
     marker: Populated<Entity, With<ReshuffleAroundMarker>>,
     active_display: ActiveDisplay,
     windows: Query<(&Window, Option<&RepositionMarker>, Option<&ResizeMarker>)>,
@@ -1048,7 +1048,7 @@ pub(super) fn reshuffle_layout_strip(
 }
 
 #[allow(clippy::needless_pass_by_value)]
-pub(super) fn pump_events(
+pub(crate) fn pump_events(
     mut exit: MessageWriter<AppExit>,
     mut messages: MessageWriter<Event>,
     incoming_events: Option<NonSend<Receiver<Event>>>,
@@ -1108,7 +1108,7 @@ pub(super) fn pump_events(
 }
 
 #[allow(clippy::needless_pass_by_value)]
-pub(super) fn window_update_frame(
+pub(crate) fn window_update_frame(
     mut messages: MessageReader<Event>,
     mut windows: Query<(&mut Window, Entity, Has<StackAdjustedResize>)>,
     focused: Option<Single<Entity, With<FocusedMarker>>>,
@@ -1193,7 +1193,7 @@ pub(super) fn window_update_frame(
 }
 
 #[allow(clippy::needless_pass_by_value)]
-pub(super) fn displays_rearranged(
+pub(crate) fn displays_rearranged(
     mut messages: MessageReader<Event>,
     workspaces: Query<(&LayoutStrip, Entity, &ChildOf)>,
     mut displays: Query<(&mut Display, Entity)>,
@@ -1384,7 +1384,7 @@ fn get_moving_window_frame(
 }
 
 #[allow(clippy::needless_pass_by_value)]
-pub(super) fn sync_menubar_height(config: Res<Config>, mut displays: Query<&mut Display>) {
+pub(crate) fn sync_menubar_height(config: Res<Config>, mut displays: Query<&mut Display>) {
     if !config.is_changed() {
         return;
     }
@@ -1565,7 +1565,7 @@ pub(crate) fn reposition_dragged_window(
 }
 
 #[allow(clippy::needless_pass_by_value)]
-pub(super) fn update_overlays(
+pub(crate) fn update_overlays(
     windows: Windows,
     applications: Query<&Application>,
     _: ActiveDisplay, // prevents this system from running without an active workspace

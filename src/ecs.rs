@@ -3,25 +3,18 @@ use std::time::Duration;
 
 use bevy::MinimalPlugins;
 use bevy::app::App as BevyApp;
-use bevy::app::{PostUpdate, PreUpdate, Startup};
 use bevy::ecs::message::Messages;
 use bevy::ecs::resource::Resource;
-use bevy::ecs::schedule::common_conditions::resource_exists;
-use bevy::ecs::system::{Commands, Res};
+use bevy::ecs::system::Commands;
 use bevy::prelude::Event as BevyEvent;
 use bevy::tasks::Task;
 use bevy::time::Timer;
-use bevy::time::common_conditions::on_timer;
 use bevy::time::{Time, Virtual};
-use bevy::{
-    app::Update,
-    ecs::{component::Component, entity::Entity, schedule::IntoScheduleConfigs},
-};
+use bevy::ecs::{component::Component, entity::Entity};
 use derive_more::{Deref, DerefMut};
 use objc2_core_graphics::CGDirectDisplayID;
 
-use crate::commands::register_commands;
-use crate::config::{CONFIGURATION_FILE, Config};
+use crate::config::CONFIGURATION_FILE;
 use crate::errors::Result;
 use crate::events::{Event, EventSender};
 use crate::manager::{
@@ -29,109 +22,11 @@ use crate::manager::{
 };
 use crate::overlay::OverlayManager;
 use crate::platform::{PlatformCallbacks, WinID};
+use crate::plugins::{AppLifecyclePlugin, DisplayPlugin, HotkeyPlugin, WindowPlugin};
 
 pub mod params;
-mod systems;
-mod triggers;
-
-/// Registers the Bevy systems for the `WindowManager`.
-/// This function adds various systems to the `Update` schedule, including event dispatchers,
-/// process/application/window lifecycle management, animation, and periodic watchers.
-/// Systems that poll for notifications are conditionally run based on the `PollForNotifications` resource.
-///
-/// # Arguments
-///
-/// * `app` - The Bevy application to register the systems with.
-pub fn register_systems(app: &mut bevy::app::App) {
-    const DISPLAY_CHANGE_CHECK_FREQ_MS: u64 = 1000;
-    app.add_systems(
-        Startup,
-        (systems::gather_displays, systems::gather_initial_processes).chain(),
-    );
-    app.add_systems(
-        PreUpdate,
-        (systems::dispatch_toplevel_triggers, systems::pump_events),
-    );
-    app.add_systems(
-        Update,
-        (
-            (
-                systems::add_existing_process,
-                systems::add_existing_application,
-                systems::finish_setup,
-            )
-                .chain()
-                .run_if(resource_exists::<Initializing>),
-            systems::window_swiper,
-            systems::swipe_idle_tracker
-                .run_if(|swipe_tracker: Option<Res<TrackpadSwipe>>| swipe_tracker.is_some()),
-            systems::add_launched_process,
-            systems::add_launched_application,
-            systems::fresh_marker_cleanup,
-            systems::timeout_ticker,
-            systems::window_update_frame,
-            systems::sync_menubar_height,
-            systems::displays_rearranged,
-            systems::reposition_dragged_window,
-            systems::find_orphaned_workspaces.run_if(on_timer(Duration::from_millis(
-                DISPLAY_CHANGE_CHECK_FREQ_MS,
-            ))),
-        ),
-    );
-    app.add_systems(
-        Update,
-        (
-            systems::display_changes_watcher,
-            systems::workspace_change_watcher,
-        )
-            .run_if(resource_exists::<PollForNotifications>)
-            .run_if(on_timer(Duration::from_millis(
-                DISPLAY_CHANGE_CHECK_FREQ_MS,
-            ))),
-    );
-    app.add_systems(
-        PostUpdate,
-        (
-            systems::reshuffle_layout_strip,
-            systems::animate_windows.after(systems::reshuffle_layout_strip),
-            systems::animate_resize_windows.after(systems::reshuffle_layout_strip),
-            systems::update_overlays
-                .after(systems::animate_windows)
-                .after(systems::animate_resize_windows)
-                .run_if(|config: Option<Res<Config>>| {
-                    config.is_some_and(|config| {
-                        config.dim_inactive_opacity() > 0.0 || config.border_active_window()
-                    })
-                }),
-        ),
-    );
-}
-
-/// Registers all the event triggers for the window manager.
-pub fn register_triggers(app: &mut bevy::app::App) {
-    app.add_observer(triggers::mouse_moved_trigger)
-        .add_observer(triggers::mouse_down_trigger)
-        .add_observer(triggers::mouse_dragged_trigger)
-        .add_observer(triggers::workspace_change_trigger)
-        .add_observer(triggers::active_workspace_trigger)
-        .add_observer(triggers::display_change_trigger)
-        .add_observer(triggers::front_switched_trigger)
-        .add_observer(triggers::center_mouse_trigger)
-        .add_observer(triggers::window_focused_trigger)
-        .add_observer(triggers::swipe_gesture_trigger)
-        .add_observer(triggers::mission_control_trigger)
-        .add_observer(triggers::application_event_trigger)
-        .add_observer(triggers::dispatch_application_messages)
-        .add_observer(triggers::window_destroyed_trigger)
-        .add_observer(triggers::window_unmanaged_trigger)
-        .add_observer(triggers::window_managed_trigger)
-        .add_observer(triggers::spawn_window_trigger)
-        .add_observer(triggers::refresh_configuration_trigger)
-        .add_observer(triggers::stray_focus_observer)
-        .add_observer(triggers::locate_dock_trigger)
-        .add_observer(triggers::send_message_trigger)
-        .add_observer(triggers::window_removal_trigger);
-}
+pub(crate) mod systems;
+pub(crate) mod triggers;
 
 /// Marker component for the currently focused window.
 #[derive(Component)]
@@ -362,7 +257,12 @@ pub fn setup_bevy_app(sender: EventSender, receiver: Receiver<Event>) -> Result<
         .insert_resource(PollForNotifications)
         .insert_resource(Initializing)
         .insert_non_send_resource(watcher)
-        .add_plugins((register_triggers, register_systems, register_commands));
+        .add_plugins((
+            WindowPlugin,
+            HotkeyPlugin,
+            DisplayPlugin,
+            AppLifecyclePlugin,
+        ));
 
     let mut platform_callbacks = PlatformCallbacks::new(sender);
     platform_callbacks.setup_handlers()?;

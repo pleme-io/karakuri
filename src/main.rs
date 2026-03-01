@@ -11,6 +11,7 @@ mod events;
 mod manager;
 mod overlay;
 mod platform;
+mod plugins;
 mod reader;
 mod util;
 

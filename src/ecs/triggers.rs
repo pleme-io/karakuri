@@ -52,7 +52,7 @@ use crate::util::symlink_target;
 /// * `main_cid` - The main connection ID resource.
 /// * `config` - The optional configuration resource.
 #[allow(clippy::needless_pass_by_value)]
-pub(super) fn mouse_moved_trigger(
+pub(crate) fn mouse_moved_trigger(
     trigger: On<WMEventTrigger>,
     windows: Windows,
     apps: Query<&Application>,
@@ -136,7 +136,7 @@ pub(super) fn mouse_moved_trigger(
 /// * `mission_control_active` - A resource indicating if Mission Control is active.
 /// * `commands` - Bevy commands to trigger a reshuffle.
 #[allow(clippy::needless_pass_by_value)]
-pub(super) fn mouse_down_trigger(
+pub(crate) fn mouse_down_trigger(
     trigger: On<WMEventTrigger>,
     windows: Windows,
     active_display: ActiveDisplay,
@@ -180,7 +180,7 @@ pub(super) fn mouse_down_trigger(
 /// * `trigger` - The Bevy event trigger containing the mouse dragged event.
 /// * `mission_control_active` - A resource indicating if Mission Control is active.
 #[allow(clippy::needless_pass_by_value)]
-pub(super) fn mouse_dragged_trigger(
+pub(crate) fn mouse_dragged_trigger(
     trigger: On<WMEventTrigger>,
     active_display: ActiveDisplay,
     windows: Windows,
@@ -254,7 +254,7 @@ fn windows_not_in_strip<F: Fn(WinID) -> Option<Entity>>(
 }
 
 #[allow(clippy::needless_pass_by_value)]
-pub(super) fn workspace_change_trigger(
+pub(crate) fn workspace_change_trigger(
     trigger: On<WMEventTrigger>,
     active_display: Single<&Display, With<ActiveDisplayMarker>>,
     mut workspaces: Query<(&mut LayoutStrip, Entity, Has<ActiveWorkspaceMarker>)>,
@@ -346,7 +346,7 @@ pub(super) fn workspace_change_trigger(
 }
 
 #[allow(clippy::needless_pass_by_value, clippy::type_complexity)]
-pub(super) fn active_workspace_trigger(
+pub(crate) fn active_workspace_trigger(
     trigger: On<Add, ActiveWorkspaceMarker>,
     windows: Windows,
     mut workspaces: Query<&mut LayoutStrip, With<ChildOf>>,
@@ -442,7 +442,7 @@ pub(super) fn active_workspace_trigger(
 /// * `main_cid` - The main connection ID resource.
 /// * `commands` - Bevy commands to manage components and trigger events.
 #[allow(clippy::needless_pass_by_value)]
-pub(super) fn display_change_trigger(
+pub(crate) fn display_change_trigger(
     trigger: On<WMEventTrigger>,
     displays: Query<(&Display, Entity, Has<ActiveDisplayMarker>)>,
     window_manager: Res<WindowManager>,
@@ -486,7 +486,7 @@ pub(super) fn display_change_trigger(
 /// * `focus_follows_mouse_id` - The resource to track focus follows mouse window ID.
 /// * `commands` - Bevy commands to trigger events and manage components.
 #[allow(clippy::needless_pass_by_value)]
-pub(super) fn front_switched_trigger(
+pub(crate) fn front_switched_trigger(
     trigger: On<WMEventTrigger>,
     windows: Windows,
     processes: Query<(&BProcess, &Children)>,
@@ -530,7 +530,7 @@ pub(super) fn front_switched_trigger(
 }
 
 #[allow(clippy::needless_pass_by_value)]
-pub(super) fn center_mouse_trigger(
+pub(crate) fn center_mouse_trigger(
     trigger: On<Add, FocusedMarker>,
     active_display: ActiveDisplay,
     windows: Windows,
@@ -572,7 +572,7 @@ pub(super) fn center_mouse_trigger(
 /// * `skip_reshuffle` - The resource to indicate if reshuffling should be skipped.
 /// * `commands` - Bevy commands to manage components and trigger events.
 #[allow(clippy::needless_pass_by_value, clippy::too_many_arguments)]
-pub(super) fn window_focused_trigger(
+pub(crate) fn window_focused_trigger(
     trigger: On<WMEventTrigger>,
     applications: Query<&Application>,
     windows: Windows,
@@ -653,7 +653,7 @@ pub(super) fn window_focused_trigger(
 /// * `config` - The optional configuration resource.
 /// * `commands` - Bevy commands to trigger events.
 #[allow(clippy::needless_pass_by_value)]
-pub(super) fn swipe_gesture_trigger(
+pub(crate) fn swipe_gesture_trigger(
     trigger: On<WMEventTrigger>,
     focused_window: Single<(&Window, Entity), With<FocusedMarker>>,
     active_display: ActiveDisplay,
@@ -689,7 +689,7 @@ pub(super) fn swipe_gesture_trigger(
 /// * `trigger` - The Bevy event trigger containing the Mission Control event.
 /// * `mission_control_active` - The `MissionControlActive` resource.
 #[allow(clippy::needless_pass_by_value)]
-pub(super) fn mission_control_trigger(
+pub(crate) fn mission_control_trigger(
     trigger: On<WMEventTrigger>,
     mut mission_control_active: ResMut<MissionControlActive>,
     mut commands: Commands,
@@ -716,7 +716,7 @@ pub(super) fn mission_control_trigger(
 /// * `processes` - A query for all processes.
 /// * `commands` - Bevy commands to spawn or despawn entities.
 #[allow(clippy::needless_pass_by_value)]
-pub(super) fn application_event_trigger(
+pub(crate) fn application_event_trigger(
     trigger: On<WMEventTrigger>,
     processes: Query<(&BProcess, Entity)>,
     mut commands: Commands,
@@ -762,7 +762,7 @@ pub(super) fn application_event_trigger(
 /// * `main_cid` - The main connection ID resource.
 /// * `commands` - Bevy commands to spawn or despawn entities.
 #[allow(clippy::needless_pass_by_value)]
-pub(super) fn dispatch_application_messages(
+pub(crate) fn dispatch_application_messages(
     trigger: On<WMEventTrigger>,
     windows: Windows,
     applications: Query<(&Application, &Children)>,
@@ -818,7 +818,7 @@ pub(super) fn dispatch_application_messages(
 }
 
 #[allow(clippy::needless_pass_by_value, clippy::too_many_lines)]
-pub(super) fn window_unmanaged_trigger(
+pub(crate) fn window_unmanaged_trigger(
     trigger: On<Add, Unmanaged>,
     windows: Windows,
     apps: Query<(Entity, &Application)>,
@@ -946,7 +946,7 @@ pub(super) fn window_unmanaged_trigger(
 }
 
 #[allow(clippy::needless_pass_by_value)]
-pub(super) fn window_managed_trigger(
+pub(crate) fn window_managed_trigger(
     trigger: On<Remove, Unmanaged>,
     mut active_display: ActiveDisplayMut,
     mut commands: Commands,
@@ -970,7 +970,7 @@ pub(super) fn window_managed_trigger(
 /// * `commands` - Bevy commands to despawn entities and trigger events.
 #[allow(clippy::needless_pass_by_value)]
 #[instrument(level = Level::DEBUG, skip_all)]
-pub(super) fn window_destroyed_trigger(
+pub(crate) fn window_destroyed_trigger(
     trigger: On<WMEventTrigger>,
     windows: Windows,
     active_display: ActiveDisplay,
@@ -1060,7 +1060,7 @@ fn give_away_focus(
 #[allow(clippy::needless_pass_by_value)]
 #[instrument(level = Level::DEBUG, skip_all)]
 #[allow(clippy::too_many_arguments)]
-pub(super) fn spawn_window_trigger(
+pub(crate) fn spawn_window_trigger(
     mut trigger: On<SpawnWindowTrigger>,
     windows: Windows,
     mut apps: Query<(Entity, &mut Application)>,
@@ -1265,7 +1265,7 @@ fn apply_window_properties(
 }
 
 #[allow(clippy::needless_pass_by_value)]
-pub(super) fn refresh_configuration_trigger(
+pub(crate) fn refresh_configuration_trigger(
     trigger: On<WMEventTrigger>,
     window_manager: Res<WindowManager>,
     mut config: ResMut<Config>,
@@ -1318,7 +1318,7 @@ pub(super) fn refresh_configuration_trigger(
 }
 
 #[allow(clippy::needless_pass_by_value)]
-pub(super) fn stray_focus_observer(
+pub(crate) fn stray_focus_observer(
     trigger: On<Add, Window>,
     focus_events: Populated<(Entity, &StrayFocusEvent)>,
     windows: Windows,
@@ -1340,7 +1340,7 @@ pub(super) fn stray_focus_observer(
 }
 
 #[allow(clippy::needless_pass_by_value)]
-pub(super) fn window_removal_trigger(
+pub(crate) fn window_removal_trigger(
     trigger: On<Remove, Window>,
     mut workspaces: Query<&mut LayoutStrip>,
 ) {
@@ -1355,7 +1355,7 @@ pub(super) fn window_removal_trigger(
 }
 
 #[allow(clippy::needless_pass_by_value)]
-pub(super) fn locate_dock_trigger(
+pub(crate) fn locate_dock_trigger(
     trigger: On<LocateDockTrigger>,
     displays: Query<(&mut Display, Entity)>,
     platform: Option<NonSend<Pin<Box<PlatformCallbacks>>>>,
@@ -1388,7 +1388,7 @@ pub(super) fn locate_dock_trigger(
 }
 
 #[allow(clippy::needless_pass_by_value)]
-pub(super) fn send_message_trigger(
+pub(crate) fn send_message_trigger(
     trigger: On<SendMessageTrigger>,
     mut messages: MessageWriter<Event>,
 ) {
