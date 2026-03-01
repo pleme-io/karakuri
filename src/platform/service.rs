@@ -8,16 +8,16 @@ use tracing::{info, warn};
 
 use crate::util::exe_path;
 
-/// The bundle identifier for the `paneru` service.
-pub const ID: &str = "com.github.karinushka.paneru";
+/// The bundle identifier for the `karakuri` service.
+pub const ID: &str = "io.pleme.karakuri";
 
-/// `Service` manages the installation, uninstallation, starting, and stopping of the `paneru` application as a launchd service.
+/// `Service` manages the installation, uninstallation, starting, and stopping of the `karakuri` application as a launchd service.
 /// It encapsulates the `launchctl::Service` and the path to the executable.
 #[derive(Debug)]
 pub struct Service {
     /// The underlying `launchctl::Service` instance.
     pub raw: launchctl::Service,
-    /// The absolute path to the `paneru` executable.
+    /// The absolute path to the `karakuri` executable.
     pub bin_path: PathBuf,
 }
 
@@ -27,7 +27,7 @@ impl Service {
     ///
     /// # Arguments
     ///
-    /// * `name` - The name of the service (e.g., "com.github.karinushka.paneru").
+    /// * `name` - The name of the service (e.g., "io.pleme.karakuri").
     ///
     /// # Returns
     ///

@@ -1,5 +1,5 @@
 {
-  description = "A sliding, tiling window manager for MacOS";
+  description = "Karakuri — programmable macOS automation framework";
 
   inputs = {
     nixpkgs.url = "github:nixos/nixpkgs?ref=nixos-unstable";
@@ -26,7 +26,7 @@
         + "_"
         + (self.shortRev or "dirty");
 
-      pname = "paneru";
+      pname = "karakuri";
 
       package = pkgs.rustPlatform.buildRustPackage {
         inherit pname version;
@@ -51,14 +51,14 @@
       };
     in
     {
-      packages.aarch64-darwin.paneru = package;
-      packages.aarch64-darwin.default = self.packages.aarch64-darwin.paneru;
+      packages.aarch64-darwin.karakuri = package;
+      packages.aarch64-darwin.default = self.packages.aarch64-darwin.karakuri;
 
       overlays.default = final: prev: {
-        paneru = self.packages.aarch64-darwin.default;
+        karakuri = self.packages.aarch64-darwin.default;
       };
 
-      # Allows running `nix develop` to get a shell with `paneru` and rust build dependencies available.
+      # Allows running `nix develop` to get a shell with `karakuri` and rust build dependencies available.
       devShells.aarch64-darwin.default = pkgs.mkShellNoCC {
         packages = [
           self.packages.aarch64-darwin.default
@@ -71,36 +71,36 @@
       # `nixfmt-tree` allows passing a directory to format all files within it.
       formatter.aarch64-darwin = pkgs.nixfmt-tree;
 
-      homeModules.paneru =
+      homeModules.karakuri =
         { config, lib, ... }:
         let
-          cfg = config.services.paneru;
+          cfg = config.services.karakuri;
           tomlFormat = pkgs.formats.toml { };
         in
         {
-          options.services.paneru = {
+          options.services.karakuri = {
             enable = lib.mkEnableOption ''
-              Install paneru and configure the launchd agent.
+              Install karakuri and configure the launchd agent.
 
               The first time this is enabled, macOS will prompt you to allow this background
               item in System Settings.
 
               You can verify the service is running correctly from your terminal.
-              Run: `launchctl list | grep paneru`
+              Run: `launchctl list | grep karakuri`
 
-              In case of failure, check the logs with `cat /tmp/paneru.err.log`.
+              In case of failure, check the logs with `cat /tmp/karakuri.err.log`.
             '';
 
             package = lib.mkOption {
               type = lib.types.package;
               default = self.packages.aarch64-darwin.default;
-              description = "The paneru package to use.";
+              description = "The karakuri package to use.";
             };
 
             settings = lib.mkOption {
               type = lib.types.nullOr lib.types.attrs;
               default = null;
-              description = "Configuration to put in `~/.paneru.toml`.";
+              description = "Configuration to put in `~/.karakuri.toml`.";
               example = {
                 options = {
                   focus_follows_mouse = true;
@@ -136,15 +136,15 @@
           };
 
           config = lib.mkIf cfg.enable {
-            assertions = [ (lib.hm.assertions.assertPlatform "services.paneru" pkgs lib.platforms.darwin) ];
-            launchd.agents.paneru = {
+            assertions = [ (lib.hm.assertions.assertPlatform "services.karakuri" pkgs lib.platforms.darwin) ];
+            launchd.agents.karakuri = {
               enable = true;
               config = {
                 KeepAlive = {
                   Crashed = true;
                   SuccessfulExit = false;
                 };
-                Label = "Paneru";
+                Label = "io.pleme.karakuri";
                 Nice = -20;
                 ProcessType = "Interactive";
                 EnvironmentVariables = {
@@ -153,18 +153,18 @@
                     if config.xdg.enable then config.xdg.configHome else "${config.home.homeDirectory}/.config";
                 };
                 RunAtLoad = true;
-                StandardOutPath = "/tmp/paneru.log";
-                StandardErrorPath = "/tmp/paneru.err.log";
+                StandardOutPath = "/tmp/karakuri.log";
+                StandardErrorPath = "/tmp/karakuri.err.log";
                 Program = lib.getExe cfg.package;
               };
             };
 
-            xdg.configFile."paneru/paneru.toml" = lib.mkIf (config.xdg.enable && cfg.settings != null) {
-              source = tomlFormat.generate "paneru.toml" cfg.settings;
+            xdg.configFile."karakuri/karakuri.toml" = lib.mkIf (config.xdg.enable && cfg.settings != null) {
+              source = tomlFormat.generate "karakuri.toml" cfg.settings;
             };
 
-            home.file.".paneru.toml" = lib.mkIf (!config.xdg.enable && cfg.settings != null) {
-              source = tomlFormat.generate ".paneru.toml" cfg.settings;
+            home.file.".karakuri.toml" = lib.mkIf (!config.xdg.enable && cfg.settings != null) {
+              source = tomlFormat.generate ".karakuri.toml" cfg.settings;
             };
           };
         };

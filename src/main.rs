@@ -27,55 +27,55 @@ use reader::CommandReader;
 
 use crate::ecs::setup_bevy_app;
 
-/// `Paneru` is the main command-line interface structure for the window manager.
-/// It defines the available subcommands for controlling the Paneru daemon.
+/// `Karakuri` is the main command-line interface structure for the automation framework.
+/// It defines the available subcommands for controlling the Karakuri daemon.
 #[derive(Clone, Debug, Default, Parser)]
 #[command(
     version = clap::crate_version!(),
     author = clap::crate_authors!(),
     about = clap::crate_description!(),
 )]
-pub struct Paneru {
+pub struct Karakuri {
     /// The subcommand to execute (e.g., `launch`, `install`, `send-cmd`).
     #[clap(subcommand)]
     subcmd: Option<SubCmd>,
 }
 
-/// `SubCmd` enumerates the available command-line subcommands for `paneru`.
+/// `SubCmd` enumerates the available command-line subcommands for `karakuri`.
 /// These subcommands allow users to launch the daemon, install/uninstall it as a service,
 /// start/stop/restart the service, or send commands to a running daemon.
 #[derive(Clone, Debug, Default, Subcommand)]
 pub enum SubCmd {
-    /// Launches the `paneru` daemon directly in the console (default behavior).
+    /// Launches the `karakuri` daemon directly in the console (default behavior).
     #[default]
     Launch,
 
-    /// Installs the `paneru` daemon as a background service.
+    /// Installs the `karakuri` daemon as a background service.
     Install,
 
-    /// Uninstalls the `paneru` background service.
+    /// Uninstalls the `karakuri` background service.
     Uninstall,
 
-    /// Reinstalls the `paneru` background service.
+    /// Reinstalls the `karakuri` background service.
     Reinstall,
 
-    /// Starts the `paneru` background service.
+    /// Starts the `karakuri` background service.
     Start,
 
-    /// Stops the `paneru` background service.
+    /// Stops the `karakuri` background service.
     Stop,
 
-    /// Restarts the `paneru` background service.
+    /// Restarts the `karakuri` background service.
     Restart,
 
-    /// Sends a command via a Unix socket to the running `paneru` daemon.
+    /// Sends a command via a Unix socket to the running `karakuri` daemon.
     SendCmd {
         #[arg(trailing_var_arg = true)]
         cmd: Vec<String>,
     },
 }
 
-/// The main entry point of the `paneru` application.
+/// The main entry point of the `karakuri` application.
 /// It sets up logging and dispatches commands accordingly.
 ///
 /// # Returns
@@ -98,7 +98,7 @@ fn main() -> Result<()> {
 
     let service = || service::Service::try_new(service::ID);
 
-    match Paneru::parse().subcmd.unwrap_or_default() {
+    match Karakuri::parse().subcmd.unwrap_or_default() {
         SubCmd::Launch => {
             let (sender, receiver) = EventSender::new();
             CommandReader::new(sender.clone()).start();

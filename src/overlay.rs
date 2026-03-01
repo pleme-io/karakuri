@@ -54,7 +54,7 @@ struct DimViewIvars {
 define_class!(
     #[unsafe(super(NSView))]
     #[thread_kind = MainThreadOnly]
-    #[name = "PaneruDimView"]
+    #[name = "KarakuriDimView"]
     #[ivars = DimViewIvars]
     #[derive(Debug)]
     struct DimView;

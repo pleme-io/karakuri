@@ -26,16 +26,16 @@ use crate::{
 use crate::{platform::CFStringRef, util::AXUIWrapper};
 
 /// A `LazyLock` that determines the path to the application's configuration file.
-/// It checks the `PANERU_CONFIG` environment variable first, then standard XDG locations and user home directory.
+/// It checks the `KARAKURI_CONFIG` environment variable first, then standard XDG locations and user home directory.
 /// If no configuration file is found, the application will panic.
 pub static CONFIGURATION_FILE: LazyLock<PathBuf> = LazyLock::new(|| {
-    if let Ok(path_str) = env::var("PANERU_CONFIG") {
+    if let Ok(path_str) = env::var("KARAKURI_CONFIG") {
         let path = PathBuf::from(path_str);
         if path.exists() {
             return path;
         }
         warn!(
-            "{}: $PANERU_CONFIG is set to {}, but the file does not exist. Falling back to default locations.",
+            "{}: $KARAKURI_CONFIG is set to {}, but the file does not exist. Falling back to default locations.",
             function_name!(),
             path.display()
         );
@@ -44,13 +44,13 @@ pub static CONFIGURATION_FILE: LazyLock<PathBuf> = LazyLock::new(|| {
     let standard_paths = [
         env::var("HOME")
             .ok()
-            .map(|h| PathBuf::from(h).join(".paneru")),
+            .map(|h| PathBuf::from(h).join(".karakuri")),
         env::var("HOME")
             .ok()
-            .map(|h| PathBuf::from(h).join(".paneru.toml")),
+            .map(|h| PathBuf::from(h).join(".karakuri.toml")),
         env::var("XDG_CONFIG_HOME")
             .ok()
-            .map(|x| PathBuf::from(x).join("paneru/paneru.toml")),
+            .map(|x| PathBuf::from(x).join("karakuri/karakuri.toml")),
     ];
 
     standard_paths
@@ -59,7 +59,7 @@ pub static CONFIGURATION_FILE: LazyLock<PathBuf> = LazyLock::new(|| {
         .find(|path| path.exists())
         .unwrap_or_else(|| {
             panic!(
-                "{}: Configuration file not found. Tried: $PANERU_CONFIG, $HOME/.paneru, $HOME/.paneru.toml, $XDG_CONFIG_HOME/paneru/paneru.toml",
+                "{}: Configuration file not found. Tried: $KARAKURI_CONFIG, $HOME/.karakuri, $HOME/.karakuri.toml, $XDG_CONFIG_HOME/karakuri/karakuri.toml",
                 function_name!()
             )
         })

@@ -1954,6 +1954,35 @@ dependencies = [
 ]
 
 [[package]]
+name = "karakuri"
+version = "0.1.0"
+dependencies = [
+ "accessibility-sys",
+ "arc-swap",
+ "bevy",
+ "bitflags 2.11.0",
+ "chrono",
+ "clap",
+ "derive_more",
+ "embed_plist",
+ "launchctl",
+ "libc",
+ "notify",
+ "objc2",
+ "objc2-app-kit",
+ "objc2-core-foundation",
+ "objc2-core-graphics",
+ "objc2-foundation",
+ "regex",
+ "scopeguard",
+ "serde",
+ "stdext",
+ "toml",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "kqueue"
 version = "1.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2473,35 +2502,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f4779c6901a562440c3786d08192c6fbda7c1c2060edd10006b05ee35d10f2d"
 dependencies = [
  "num-traits",
-]
-
-[[package]]
-name = "paneru"
-version = "0.3.5"
-dependencies = [
- "accessibility-sys",
- "arc-swap",
- "bevy",
- "bitflags 2.11.0",
- "chrono",
- "clap",
- "derive_more",
- "embed_plist",
- "launchctl",
- "libc",
- "notify",
- "objc2",
- "objc2-app-kit",
- "objc2-core-foundation",
- "objc2-core-graphics",
- "objc2-foundation",
- "regex",
- "scopeguard",
- "serde",
- "stdext",
- "toml",
- "tracing",
- "tracing-subscriber",
 ]
 
 [[package]]
