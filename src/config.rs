@@ -176,6 +176,7 @@ pub fn parse_command(argv: &[&str]) -> Result<Command> {
         "window" => Command::Window(parse_operation(&argv[1..])?),
         "mouse" => Command::Mouse(parse_mouse_move(&argv[1..])?),
         "quit" => Command::Quit,
+        "exec" => Command::Exec(argv[1..].join(" ")),
         _ => {
             return Err(Error::InvalidConfig(format!(
                 "{}: Unhandled command '{argv:?}'",
@@ -462,6 +463,8 @@ struct InnerConfig {
     bindings: HashMap<String, OneOrMore>,
     windows: Option<HashMap<String, WindowParams>>,
     scripting: Option<ScriptingConfig>,
+    /// Named shell commands referenced by `exec_<name>` bindings.
+    execs: Option<HashMap<String, String>>,
 }
 
 /// Configuration for the Rhai scripting engine.
@@ -510,11 +513,27 @@ impl InnerConfig {
     /// Resolves keybinding codes and commands by looking up virtual keys and literal keycodes.
     fn resolve_keybindings(&mut self) -> Result<()> {
         let virtual_keys = generate_virtual_keymap();
+        let execs = self.execs.clone();
 
         for (command, bindings) in &mut self.bindings {
             let argv = command.split('_').collect::<Vec<_>>();
             for binding in bindings.all_mut() {
-                binding.command = parse_command(&argv)?;
+                // exec_<name> bindings resolve the shell command from the [execs] map.
+                if argv.first() == Some(&"exec") && argv.len() >= 2 {
+                    let exec_name = argv[1..].join("_");
+                    let shell_cmd = execs
+                        .as_ref()
+                        .and_then(|e| e.get(&exec_name))
+                        .ok_or_else(|| {
+                            Error::InvalidConfig(format!(
+                                "exec binding '{command}' references unknown exec '{exec_name}'"
+                            ))
+                        })?
+                        .clone();
+                    binding.command = Command::Exec(shell_cmd);
+                } else {
+                    binding.command = parse_command(&argv)?;
+                }
 
                 let code = virtual_keys
                     .iter()

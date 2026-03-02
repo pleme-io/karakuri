@@ -7,7 +7,7 @@ use bevy::ecs::message::MessageReader;
 use bevy::ecs::query::{Has, With};
 use bevy::ecs::system::{Commands, Query, Res, ResMut, Single};
 use bevy::math::IRect;
-use tracing::debug;
+use tracing::{debug, error, info};
 use tracing::{Level, instrument};
 
 use crate::config::Config;
@@ -77,6 +77,8 @@ pub enum Command {
     /// A command to quit the window manager application.
     Quit,
     PrintState,
+    /// Execute an arbitrary shell command (e.g., `open -a Raycast`).
+    Exec(String),
 }
 
 pub fn register_commands(app: &mut bevy::app::App) {
@@ -95,6 +97,7 @@ pub fn register_commands(app: &mut bevy::app::App) {
             stack_windows_handler,
             command_move_focus,
             command_swap_focus,
+            exec_command_handler,
         ),
     );
 }
@@ -920,6 +923,27 @@ fn print_internal_state_handler(
 
     if let Some(pool) = bevy::tasks::ComputeTaskPool::try_get() {
         debug!("Running with {} threads", pool.thread_num());
+    }
+}
+
+/// Executes arbitrary shell commands triggered by `Command::Exec` bindings.
+#[allow(clippy::needless_pass_by_value)]
+fn exec_command_handler(mut messages: MessageReader<Event>) {
+    for event in messages.read() {
+        if let Event::Command {
+            command: Command::Exec(shell_cmd),
+        } = event
+        {
+            info!("exec: {shell_cmd}");
+            match std::process::Command::new("/bin/sh")
+                .arg("-c")
+                .arg(shell_cmd)
+                .spawn()
+            {
+                Ok(_) => debug!("exec: spawned '{shell_cmd}'"),
+                Err(e) => error!("exec: failed to spawn '{shell_cmd}': {e}"),
+            }
+        }
     }
 }
 
