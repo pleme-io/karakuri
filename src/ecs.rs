@@ -22,7 +22,10 @@ use crate::manager::{
 };
 use crate::overlay::OverlayManager;
 use crate::platform::{PlatformCallbacks, WinID};
-use crate::plugins::{AppLifecyclePlugin, DisplayPlugin, HotkeyPlugin, ScriptingPlugin, WindowPlugin};
+use crate::plugins::{
+    AppLifecyclePlugin, ClipboardPlugin, DisplayPlugin, HotkeyPlugin, MenuBarPlugin,
+    NotificationPlugin, ScriptingPlugin, WindowPlugin,
+};
 
 pub mod params;
 pub(crate) mod systems;
@@ -263,6 +266,9 @@ pub fn setup_bevy_app(sender: EventSender, receiver: Receiver<Event>) -> Result<
             DisplayPlugin,
             AppLifecyclePlugin,
             ScriptingPlugin::new(),
+            ClipboardPlugin,
+            NotificationPlugin,
+            MenuBarPlugin,
         ));
 
     let mut platform_callbacks = PlatformCallbacks::new(sender);

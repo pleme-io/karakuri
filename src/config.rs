@@ -375,6 +375,10 @@ impl Config {
             .unwrap_or(4.0)
             .clamp(1.0, 10.0)
     }
+
+    pub fn scripting(&self) -> Option<ScriptingConfig> {
+        self.inner().scripting.clone()
+    }
 }
 
 fn parse_hex_color(hex: &str) -> (f64, f64, f64) {
@@ -441,6 +445,19 @@ struct InnerConfig {
     options: MainOptions,
     bindings: HashMap<String, OneOrMore>,
     windows: Option<HashMap<String, WindowParams>>,
+    scripting: Option<ScriptingConfig>,
+}
+
+/// Configuration for the Rhai scripting engine.
+#[derive(Deserialize, Clone, Debug, Default)]
+pub struct ScriptingConfig {
+    /// Path to the init script (e.g., `~/.config/karakuri/init.rhai`).
+    pub init_script: Option<String>,
+    /// Directories to scan for additional .rhai scripts.
+    #[serde(default)]
+    pub script_dirs: Vec<String>,
+    /// Enable hot-reload of scripts on file changes (default: true).
+    pub hot_reload: Option<bool>,
 }
 
 impl InnerConfig {
