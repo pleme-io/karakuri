@@ -1,5 +1,9 @@
 use arc_swap::{ArcSwap, Guard};
 use bevy::ecs::resource::Resource;
+use figment::{
+    Figment,
+    providers::{Env, Format, Toml as FigToml, Yaml as FigYaml},
+};
 use objc2_core_foundation::{CFData, CFString};
 use regex::Regex;
 use serde::{Deserialize, Deserializer, de};
@@ -7,7 +11,6 @@ use std::{
     collections::HashMap,
     env,
     ffi::c_void,
-    fs::read_to_string,
     path::{Path, PathBuf},
     ptr::NonNull,
     sync::{Arc, LazyLock},
@@ -42,6 +45,20 @@ pub static CONFIGURATION_FILE: LazyLock<PathBuf> = LazyLock::new(|| {
     }
 
     let standard_paths = [
+        // YAML (preferred format)
+        env::var("XDG_CONFIG_HOME")
+            .ok()
+            .map(|x| PathBuf::from(x).join("karakuri/karakuri.yaml")),
+        env::var("XDG_CONFIG_HOME")
+            .ok()
+            .map(|x| PathBuf::from(x).join("karakuri/karakuri.yml")),
+        env::var("HOME")
+            .ok()
+            .map(|h| PathBuf::from(h).join(".config/karakuri/karakuri.yaml")),
+        env::var("HOME")
+            .ok()
+            .map(|h| PathBuf::from(h).join(".config/karakuri/karakuri.yml")),
+        // TOML (backwards compatible)
         env::var("HOME")
             .ok()
             .map(|h| PathBuf::from(h).join(".karakuri")),
@@ -187,9 +204,8 @@ impl Config {
     ///
     /// `Ok(Self)` if the configuration is loaded successfully, otherwise `Err(Error)` with an error message.
     pub fn new(path: &Path) -> Result<Self> {
-        let input = read_to_string(path)?;
         Ok(Config {
-            inner: Arc::new(ArcSwap::from_pointee(InnerConfig::new(&input)?)),
+            inner: Arc::new(ArcSwap::from_pointee(InnerConfig::from_figment(path)?)),
         })
     }
 
@@ -203,8 +219,7 @@ impl Config {
     ///
     /// `Ok(())` if the configuration is reloaded successfully, otherwise `Err(Error)` with an error message.
     pub fn reload_config(&mut self, path: &Path) -> Result<()> {
-        let input = read_to_string(path)?;
-        let new = InnerConfig::new(&input)?;
+        let new = InnerConfig::from_figment(path)?;
         self.inner.store(Arc::new(new));
         Ok(())
     }
@@ -410,7 +425,7 @@ impl TryFrom<&str> for Config {
 
     fn try_from(input: &str) -> std::result::Result<Self, Self::Error> {
         Ok(Config {
-            inner: Arc::new(ArcSwap::from_pointee(InnerConfig::new(input)?)),
+            inner: Arc::new(ArcSwap::from_pointee(InnerConfig::parse_config(input)?)),
         })
     }
 }
@@ -441,6 +456,7 @@ impl OneOrMore {
 /// `InnerConfig` holds the actual configuration data parsed from a file, including options, keybindings, and window parameters.
 /// It is typically accessed via an `Arc<RwLock<InnerConfig>>` within the `Config` struct.
 #[derive(Deserialize, Debug, Default)]
+#[serde(default)]
 struct InnerConfig {
     options: MainOptions,
     bindings: HashMap<String, OneOrMore>,
@@ -461,34 +477,41 @@ pub struct ScriptingConfig {
 }
 
 impl InnerConfig {
-    /// Creates a new `InnerConfig` by reading and parsing the configuration file from the specified `path`.
-    ///
-    /// # Arguments
-    ///
-    /// * `path` - A reference to the path of the configuration file.
-    ///
-    /// # Returns
-    ///
-    /// `Ok(InnerConfig)` if the configuration is parsed successfully, otherwise `Err(Error)` with an error message.
-    fn new(input: &str) -> Result<InnerConfig> {
-        InnerConfig::parse_config(input)
+    /// Loads configuration using figment's layered provider chain:
+    /// defaults (serde) → environment variables → config file (TOML or YAML).
+    fn from_figment(path: &Path) -> Result<InnerConfig> {
+        let mut figment = Figment::new()
+            .merge(Env::prefixed("KARAKURI_").split("__"));
+
+        // Layer the config file on top (highest priority per the figment pattern).
+        match path.extension().and_then(|e| e.to_str()) {
+            Some("yaml" | "yml") => {
+                figment = figment.merge(FigYaml::file(path));
+            }
+            _ => {
+                figment = figment.merge(FigToml::file(path));
+            }
+        }
+
+        let mut config: InnerConfig = figment
+            .extract()
+            .map_err(|e| Error::InvalidConfig(e.to_string()))?;
+        config.resolve_keybindings()?;
+        Ok(config)
     }
 
-    /// Parses the configuration from a string `input`.
-    /// It populates the `code` and `command` fields of `Keybinding` by looking up virtual keys and literal keycodes.
-    ///
-    /// # Arguments
-    ///
-    /// * `input` - The string content of the configuration file.
-    ///
-    /// # Returns
-    ///
-    /// `Ok(InnerConfig)` if the parsing is successful, otherwise `Err(Error)` with an error message.
+    /// Parses configuration from a TOML string (used in tests and legacy paths).
     fn parse_config(input: &str) -> Result<InnerConfig> {
-        let virtual_keys = generate_virtual_keymap();
         let mut config: InnerConfig = toml::from_str(input)?;
+        config.resolve_keybindings()?;
+        Ok(config)
+    }
 
-        for (command, bindings) in &mut config.bindings {
+    /// Resolves keybinding codes and commands by looking up virtual keys and literal keycodes.
+    fn resolve_keybindings(&mut self) -> Result<()> {
+        let virtual_keys = generate_virtual_keymap();
+
+        for (command, bindings) in &mut self.bindings {
             let argv = command.split('_').collect::<Vec<_>>();
             for binding in bindings.all_mut() {
                 binding.command = parse_command(&argv)?;
@@ -510,7 +533,7 @@ impl InnerConfig {
                 info!("bind: {binding:?}");
             }
         }
-        Ok(config)
+        Ok(())
     }
 }
 

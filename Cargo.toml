@@ -42,6 +42,7 @@ rhai = { version = "1.23", features = ["sync"] }
 scopeguard = "1.2.0"
 serde = { version = "1.0.228", features = ["derive"] }
 stdext = "0.3.3"
+figment = { version = "0.10", features = ["env", "toml", "yaml"] }
 toml = "1.0.3"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }
