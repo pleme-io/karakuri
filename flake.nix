@@ -3,12 +3,21 @@
 
   inputs = {
     nixpkgs.url = "github:nixos/nixpkgs?ref=nixos-unstable";
+    substrate = {
+      url = "github:pleme-io/substrate";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
   outputs =
-    { self, nixpkgs }:
+    {
+      self,
+      nixpkgs,
+      substrate,
+    }:
     let
-      pkgs = import nixpkgs { system = "aarch64-darwin"; };
+      system = "aarch64-darwin";
+      pkgs = import nixpkgs { inherit system; };
 
       mkDate =
         longDate:
@@ -45,128 +54,33 @@
         doCheck = false;
 
         meta = {
-          # Tells `lib.getExe` which package name to get.
           mainProgram = pname;
         };
       };
     in
     {
-      packages.aarch64-darwin.karakuri = package;
-      packages.aarch64-darwin.default = self.packages.aarch64-darwin.karakuri;
-
-      overlays.default = final: prev: {
-        karakuri = self.packages.aarch64-darwin.default;
+      packages.${system} = {
+        karakuri = package;
+        default = package;
       };
 
-      # Allows running `nix develop` to get a shell with `karakuri` and rust build dependencies available.
-      devShells.aarch64-darwin.default = pkgs.mkShellNoCC {
+      overlays.default = final: prev: {
+        karakuri = self.packages.${final.system}.default;
+      };
+
+      homeManagerModules.default = import ./module {
+        hmHelpers = import "${substrate}/lib/hm-service-helpers.nix" { lib = nixpkgs.lib; };
+      };
+
+      devShells.${system}.default = pkgs.mkShellNoCC {
         packages = [
-          self.packages.aarch64-darwin.default
+          package
           pkgs.rustc
           pkgs.cargo
+          pkgs.rust-analyzer
         ];
       };
 
-      # Run `nix fmt .` to format all nix files in the repo.
-      # `nixfmt-tree` allows passing a directory to format all files within it.
-      formatter.aarch64-darwin = pkgs.nixfmt-tree;
-
-      homeModules.karakuri =
-        { config, lib, ... }:
-        let
-          cfg = config.services.karakuri;
-          tomlFormat = pkgs.formats.toml { };
-        in
-        {
-          options.services.karakuri = {
-            enable = lib.mkEnableOption ''
-              Install karakuri and configure the launchd agent.
-
-              The first time this is enabled, macOS will prompt you to allow this background
-              item in System Settings.
-
-              You can verify the service is running correctly from your terminal.
-              Run: `launchctl list | grep karakuri`
-
-              In case of failure, check the logs with `cat /tmp/karakuri.err.log`.
-            '';
-
-            package = lib.mkOption {
-              type = lib.types.package;
-              default = self.packages.aarch64-darwin.default;
-              description = "The karakuri package to use.";
-            };
-
-            settings = lib.mkOption {
-              type = lib.types.nullOr lib.types.attrs;
-              default = null;
-              description = "Configuration to put in `~/.karakuri.toml`.";
-              example = {
-                options = {
-                  focus_follows_mouse = true;
-                  preset_column_widths = [
-                    0.25
-                    0.33
-                    0.5
-                    0.66
-                    0.75
-                  ];
-                  swipe_gesture_fingers = 4;
-                  swipe_gesture_direction = "Natural";
-                  animation_speed = 4000;
-                };
-                bindings = {
-                  window_focus_west = "cmd - h";
-                  window_focus_east = "cmd - l";
-                  window_focus_north = "cmd - k";
-                  window_focus_south = "cmd - j";
-                  window_swap_west = "alt - h";
-                  window_swap_east = "alt - l";
-                  window_swap_first = "alt + shift - h";
-                  window_swap_last = "alt + shift - l";
-                  window_center = "alt - c";
-                  window_resize = "alt - r";
-                  window_manage = "ctrl + alt - t";
-                  window_stack = "alt - ]";
-                  window_unstack = "alt + shift - ]";
-                  quit = "ctrl + alt - q";
-                };
-              };
-            };
-          };
-
-          config = lib.mkIf cfg.enable {
-            assertions = [ (lib.hm.assertions.assertPlatform "services.karakuri" pkgs lib.platforms.darwin) ];
-            launchd.agents.karakuri = {
-              enable = true;
-              config = {
-                KeepAlive = {
-                  Crashed = true;
-                  SuccessfulExit = false;
-                };
-                Label = "io.pleme.karakuri";
-                Nice = -20;
-                ProcessType = "Interactive";
-                EnvironmentVariables = {
-                  NO_COLOR = "1";
-                  XDG_CONFIG_HOME =
-                    if config.xdg.enable then config.xdg.configHome else "${config.home.homeDirectory}/.config";
-                };
-                RunAtLoad = true;
-                StandardOutPath = "/tmp/karakuri.log";
-                StandardErrorPath = "/tmp/karakuri.err.log";
-                Program = lib.getExe cfg.package;
-              };
-            };
-
-            xdg.configFile."karakuri/karakuri.toml" = lib.mkIf (config.xdg.enable && cfg.settings != null) {
-              source = tomlFormat.generate "karakuri.toml" cfg.settings;
-            };
-
-            home.file.".karakuri.toml" = lib.mkIf (!config.xdg.enable && cfg.settings != null) {
-              source = tomlFormat.generate ".karakuri.toml" cfg.settings;
-            };
-          };
-        };
+      formatter.${system} = pkgs.nixfmt-tree;
     };
 }
