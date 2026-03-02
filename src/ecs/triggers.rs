@@ -1283,13 +1283,13 @@ pub(crate) fn refresh_configuration_trigger(
             // When using the RecommendedWatcher, the event triggers on file data.
             // When using PollWatcher, it triggers on modification time.
             ModifyKind::Metadata(MetadataKind::WriteTime) | ModifyKind::Data(DataChange::Content),
-        ) => (),
+        )
+        | EventKind::Create(_) => (),
         EventKind::Remove(_) => {
-            for path in &event.paths {
-                _ = watcher.unwatch(path).inspect_err(|err| {
-                    error!("unwatching the config '{}': {err}", path.display());
-                });
-            }
+            // Don't unwatch on Remove — the file may reappear immediately
+            // (e.g., Nix rebuild replacing a symlink via unlink + symlink).
+            // PollWatcher continues polling and will detect the new file.
+            info!("config file removed, continuing to watch for replacement...");
             return;
         }
         _ => return,

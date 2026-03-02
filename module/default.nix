@@ -11,7 +11,10 @@ let
   inherit (hmHelpers) mkLaunchdService;
   cfg = config.blackmatter.components.karakuri;
   isDarwin = pkgs.stdenv.isDarwin;
-  tomlFormat = pkgs.formats.toml { };
+
+  # Generate YAML config from nix attrs (following kindling pattern)
+  yamlConfig = pkgs.writeText "karakuri.yaml"
+    (lib.generators.toYAML { } cfg.settings);
 
   logDir =
     if isDarwin then "${config.home.homeDirectory}/Library/Logs" else "${config.home.homeDirectory}/.local/share/karakuri/logs";
@@ -30,8 +33,9 @@ in
       type = types.nullOr types.attrs;
       default = null;
       description = ''
-        Configuration written to `~/.config/karakuri/karakuri.toml`.
-        Accepts any attrs that serialize to valid karakuri TOML config.
+        Configuration written to `~/.config/karakuri/karakuri.yaml`.
+        Accepts any attrs that serialize to valid karakuri YAML config.
+        Figment loads: defaults → env vars (KARAKURI_*) → this file.
       '';
       example = {
         options = {
@@ -52,6 +56,19 @@ in
           window_focus_north = "cmd - k";
           window_focus_south = "cmd - j";
           quit = "ctrl + alt - q";
+        };
+        windows = {
+          pip = {
+            title = "picture.*picture";
+            bundle_id = "com.something.apple";
+            floating = true;
+            index = 1;
+          };
+        };
+        scripting = {
+          init_script = "~/.config/karakuri/init.rhai";
+          script_dirs = [ "~/.config/karakuri/scripts" ];
+          hot_reload = true;
         };
       };
     };
@@ -115,10 +132,9 @@ in
       keepAlive = true;
     })
 
-    # TOML configuration
+    # YAML configuration (figment-based, hot-reloaded)
     (mkIf (cfg.settings != null) {
-      xdg.configFile."karakuri/karakuri.toml".source =
-        tomlFormat.generate "karakuri.toml" cfg.settings;
+      xdg.configFile."karakuri/karakuri.yaml".source = yamlConfig;
     })
 
     # Rhai init script
