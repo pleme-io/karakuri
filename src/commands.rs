@@ -665,6 +665,10 @@ fn to_next_display(
 
     window_manager.center_mouse(None, &other.bounds());
 
+    // Trigger DisplayChanged so ActiveDisplayMarker updates immediately
+    // instead of waiting for the 1s polling watcher.
+    commands.trigger(WMEventTrigger(Event::DisplayChanged));
+
     if let Some(neighbour) = active_display.active_strip().right_neighbour(entity) {
         reshuffle_around(neighbour, &mut commands);
     }
@@ -694,7 +698,7 @@ fn mouse_to_next_display(
         return;
     }
 
-    let Some((other, _, _)) = displays.iter().find(|(_, _, active)| !*active) else {
+    let Some((other, other_entity, _)) = displays.iter().find(|(_, _, active)| !*active) else {
         debug!("no other display to move mouse to.");
         return;
     };
@@ -726,6 +730,15 @@ fn mouse_to_next_display(
     let visible_frame = other.bounds().intersect(window.frame());
     debug!("warping mouse to {visible_frame:?}",);
     window_manager.center_mouse(None, &visible_frame);
+
+    // Immediately swap ActiveDisplayMarker so subsequent commands use the
+    // correct display strip without waiting for the 1s polling watcher.
+    for (_, entity, active) in displays.iter() {
+        if active {
+            commands.entity(entity).remove::<ActiveDisplayMarker>();
+        }
+    }
+    commands.entity(other_entity).insert(ActiveDisplayMarker);
 
     let point = origin_to(visible_frame.center());
     ffm_flag.as_mut().0 = None;
