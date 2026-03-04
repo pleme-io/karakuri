@@ -64,10 +64,14 @@ fn sync_snapshot(
             }
 
             let mut win_snapshots = Vec::new();
+            let mut seen_entities = std::collections::HashSet::new();
+
+            // First, include windows tracked in the layout strip.
             for entity in strip.all_windows() {
                 if let Ok((window, win_entity, win_child, unmanaged, full_width)) =
                     windows.get(entity)
                 {
+                    seen_entities.insert(win_entity);
                     let bundle_id = apps
                         .get(win_child.parent())
                         .ok()
@@ -96,6 +100,51 @@ fn sync_snapshot(
                         focused_window_snapshot = Some(snap.clone());
                     }
                     win_snapshots.push(snap);
+                }
+            }
+
+            // Also include floating/unmanaged windows not in the strip
+            // (in floating mode, windows are removed from the strip but
+            // still exist as entities parented to an Application).
+            if ws_active {
+                for (window, win_entity, win_child, unmanaged, full_width) in &windows {
+                    if seen_entities.contains(&win_entity) || unmanaged.is_none() {
+                        continue;
+                    }
+                    // Check that this window's Application is parented to this display.
+                    let app_entity = win_child.parent();
+                    if let Ok(app_child) = apps.get(app_entity) {
+                        // Application doesn't have ChildOf<Display> — we can't filter
+                        // by display here. Include all floating windows on the active
+                        // workspace only.
+                        let bundle_id = app_child
+                            .bundle_id()
+                            .map(str::to_owned)
+                            .unwrap_or_default();
+
+                        let is_focused = focused_entity.is_some_and(|f| f == win_entity);
+                        let frame = window.frame();
+                        let snap = WindowSnapshot {
+                            id: window.id(),
+                            title: window.title().unwrap_or_default(),
+                            app_name: bundle_id.clone(),
+                            bundle_id,
+                            bounds: BoundsSnapshot {
+                                x: frame.min.x,
+                                y: frame.min.y,
+                                width: frame.width(),
+                                height: frame.height(),
+                            },
+                            is_focused,
+                            is_unmanaged: true,
+                            is_full_width: full_width.is_some(),
+                        };
+
+                        if is_focused {
+                            focused_window_snapshot = Some(snap.clone());
+                        }
+                        win_snapshots.push(snap);
+                    }
                 }
             }
 

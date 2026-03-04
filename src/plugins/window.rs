@@ -27,7 +27,7 @@ impl Plugin for WindowPlugin {
                 systems::timeout_ticker,
                 systems::window_update_frame,
                 systems::reposition_dragged_window
-                    .run_if(not(in_state(InteractionMode::Swiping))),
+                    .run_if(in_state(InteractionMode::Idle)),
             ),
         );
 

@@ -169,10 +169,11 @@ pub(crate) fn mouse_down_trigger(
 
     // When mouse is fully disconnected from tiling, suppress the reshuffle
     // that would otherwise be triggered by the macOS-native WindowFocused event
-    // following this click.
+    // following this click. The reshuffle gate is set here; the actual
+    // suppression is enforced by `reposition_dragged_window` being gated
+    // via `not(in_state(Dragging))`.
     if config.mouse_disconnected() {
         config.set_skip_reshuffle(true);
-        return;
     }
 
     if window.frame().min.x < 0
@@ -207,11 +208,10 @@ pub(crate) fn mouse_dragged_trigger(
     if config.mission_control_active() {
         return;
     }
-    // When mouse is disconnected from tiling, don't track drags —
-    // prevents `reposition_dragged_window` from reshuffling the layout.
-    if config.mouse_disconnected() {
-        return;
-    }
+    // Drag markers are always created regardless of mouse_disconnected().
+    // The downstream `reposition_dragged_window` system is gated by
+    // `not(in_state(Dragging))` to prevent reshuffles during edge-snap
+    // drags in floating mode.
 
     let Some((window, entity)) = window_manager
         .0
