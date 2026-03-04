@@ -1655,3 +1655,57 @@ pub(crate) fn update_overlays(
         border_params.as_ref(),
     );
 }
+
+/// Shows/hides the snap preview overlay based on `EdgeSnapState`.
+#[allow(clippy::needless_pass_by_value)]
+pub(crate) fn update_snap_preview(
+    snap_state: Option<Res<super::EdgeSnapState>>,
+    displays: Query<&Display>,
+    config: Res<Config>,
+    overlay_mgr: Option<NonSendMut<OverlayManager>>,
+) {
+    use crate::ecs::triggers::snap_frame;
+    use crate::overlay::BorderParams;
+    use objc2_foundation::{NSPoint, NSRect, NSSize};
+
+    let Some(mut overlay_mgr) = overlay_mgr else {
+        return;
+    };
+
+    if !config.edge_snap_preview_enabled() {
+        overlay_mgr.hide_snap_preview();
+        return;
+    }
+
+    let zone = snap_state.as_ref().and_then(|s| s.zone);
+
+    let Some(zone) = zone else {
+        overlay_mgr.hide_snap_preview();
+        return;
+    };
+
+    let display_id = snap_state.as_ref().unwrap().display_id;
+    let Some(display) = displays.iter().find(|d| d.id() == display_id) else {
+        overlay_mgr.hide_snap_preview();
+        return;
+    };
+
+    let bounds = display.bounds();
+    let pad = config.edge_padding();
+    let (origin, size) = snap_frame(zone, &bounds, pad);
+
+    let abs_cg_frame = NSRect::new(
+        NSPoint::new(f64::from(origin.x), f64::from(origin.y)),
+        NSSize::new(f64::from(size.x), f64::from(size.y)),
+    );
+
+    let opacity = config.edge_snap_preview_opacity();
+    let border = BorderParams {
+        color: config.border_color(),
+        opacity: config.border_opacity(),
+        width: config.border_width(),
+        radius: config.border_radius(),
+    };
+
+    overlay_mgr.update_snap_preview(abs_cg_frame, opacity, &border);
+}

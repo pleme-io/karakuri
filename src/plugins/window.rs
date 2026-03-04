@@ -48,6 +48,8 @@ impl Plugin for WindowPlugin {
                             config.dim_inactive_opacity() > 0.0 || config.border_active_window()
                         })
                     }),
+                systems::update_snap_preview
+                    .after(systems::update_overlays),
             ),
         );
 

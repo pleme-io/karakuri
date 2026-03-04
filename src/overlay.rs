@@ -205,6 +205,86 @@ fn full_screen_rect(mtm: MainThreadMarker) -> NSRect {
     )
 }
 
+// ── SnapPreviewView: translucent filled rect with border ────────────────
+
+#[derive(Debug, Clone)]
+struct SnapPreviewIvars {
+    fill_opacity: f64,
+    border_r: f64,
+    border_g: f64,
+    border_b: f64,
+    border_opacity: f64,
+    border_width: f64,
+    border_radius: f64,
+}
+
+define_class!(
+    #[unsafe(super(NSView))]
+    #[thread_kind = MainThreadOnly]
+    #[name = "KarakuriSnapPreviewView"]
+    #[ivars = SnapPreviewIvars]
+    #[derive(Debug)]
+    struct SnapPreviewView;
+
+    impl SnapPreviewView {
+        #[unsafe(method(drawRect:))]
+        fn draw_rect(&self, _dirty_rect: NSRect) {
+            let ivars = self.ivars();
+            let bounds = self.bounds();
+            let radius = ivars.border_radius as CGFloat;
+
+            // Fill with translucent white.
+            let fill_color = NSColor::colorWithSRGBRed_green_blue_alpha(
+                1.0, 1.0, 1.0, ivars.fill_opacity as CGFloat,
+            );
+            fill_color.setFill();
+            let path = NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(
+                bounds, radius, radius,
+            );
+            path.fill();
+
+            // Stroke border.
+            let border_color = NSColor::colorWithSRGBRed_green_blue_alpha(
+                ivars.border_r as CGFloat,
+                ivars.border_g as CGFloat,
+                ivars.border_b as CGFloat,
+                ivars.border_opacity as CGFloat,
+            );
+            border_color.setStroke();
+            let inset = ivars.border_width / 2.0;
+            let stroke_rect = NSRect::new(
+                NSPoint::new(bounds.origin.x + inset, bounds.origin.y + inset),
+                NSSize::new(bounds.size.width - ivars.border_width, bounds.size.height - ivars.border_width),
+            );
+            let stroke_path = NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(
+                stroke_rect, radius, radius,
+            );
+            stroke_path.setLineWidth(ivars.border_width as CGFloat);
+            stroke_path.stroke();
+        }
+    }
+);
+
+impl SnapPreviewView {
+    fn new(
+        mtm: MainThreadMarker,
+        frame: NSRect,
+        fill_opacity: f64,
+        border: &BorderParams,
+    ) -> Retained<Self> {
+        let this = Self::alloc(mtm).set_ivars(SnapPreviewIvars {
+            fill_opacity,
+            border_r: border.color.0,
+            border_g: border.color.1,
+            border_b: border.color.2,
+            border_opacity: border.opacity,
+            border_width: border.width,
+            border_radius: border.radius,
+        });
+        unsafe { msg_send![super(this), initWithFrame: frame] }
+    }
+}
+
 // ── Overlay window factory ──────────────────────────────────────────────
 
 fn make_overlay_window(mtm: MainThreadMarker, cocoa_frame: NSRect) -> Retained<NSWindow> {
@@ -237,6 +317,10 @@ pub struct OverlayManager {
     /// Single fullscreen overlay window (dim + cutout + border).
     overlay: Option<(Retained<NSWindow>, DimParams)>,
     hidden: bool,
+    /// Snap preview overlay — translucent rectangle shown during edge-snap drag.
+    snap_preview: Option<Retained<NSWindow>>,
+    /// The CG-space frame the snap preview is currently showing (to avoid redundant updates).
+    snap_preview_frame: Option<NSRect>,
 }
 
 impl OverlayManager {
@@ -245,6 +329,8 @@ impl OverlayManager {
             mtm,
             overlay: None,
             hidden: false,
+            snap_preview: None,
+            snap_preview_frame: None,
         }
     }
 
@@ -308,10 +394,47 @@ impl OverlayManager {
         }
     }
 
+    /// Show or update the snap preview at the given absolute CG frame.
+    pub fn update_snap_preview(&mut self, abs_cg_frame: NSRect, opacity: f64, border: &BorderParams) {
+        // Skip update if the frame hasn't changed.
+        if self.snap_preview_frame.as_ref().is_some_and(|f| *f == abs_cg_frame) {
+            return;
+        }
+
+        let screen_h = primary_screen_height(self.mtm);
+        let cocoa_frame = cg_abs_to_cocoa(abs_cg_frame, screen_h);
+        let view_frame = NSRect::new(NSPoint::new(0.0, 0.0), cocoa_frame.size);
+
+        if let Some(window) = &self.snap_preview {
+            let view = SnapPreviewView::new(self.mtm, view_frame, opacity, border);
+            window.setContentView(Some(&view));
+            window.setFrame_display(cocoa_frame, true);
+        } else {
+            let window = make_overlay_window(self.mtm, cocoa_frame);
+            // Place above the dim overlay.
+            window.setLevel(NSFloatingWindowLevel + 1);
+            let view = SnapPreviewView::new(self.mtm, view_frame, opacity, border);
+            window.setContentView(Some(&view));
+            window.orderFront(None::<&AnyObject>);
+            self.snap_preview = Some(window);
+        }
+
+        self.snap_preview_frame = Some(abs_cg_frame);
+    }
+
+    /// Hide and destroy the snap preview.
+    pub fn hide_snap_preview(&mut self) {
+        if let Some(window) = self.snap_preview.take() {
+            window.orderOut(None::<&AnyObject>);
+        }
+        self.snap_preview_frame = None;
+    }
+
     pub fn remove_all(&mut self) {
         if let Some((window, _)) = self.overlay.take() {
             window.orderOut(None::<&AnyObject>);
         }
+        self.hide_snap_preview();
         self.hidden = false;
     }
 

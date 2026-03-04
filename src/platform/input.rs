@@ -1,10 +1,11 @@
 use core::ptr::NonNull;
 use objc2::rc::Retained;
 use objc2_app_kit::{NSEvent, NSEventType, NSTouch, NSTouchPhase};
-use objc2_core_foundation::{CFMachPort, CFRetained, CFRunLoop, kCFRunLoopCommonModes};
+use objc2_core_foundation::{CFMachPort, CFRetained, CFRunLoop, CGPoint, CGRect, kCFRunLoopCommonModes};
 use objc2_core_graphics::{
-    CGEvent, CGEventField, CGEventFlags, CGEventTapLocation, CGEventTapOptions,
-    CGEventTapPlacement, CGEventTapProxy, CGEventType,
+    CGDirectDisplayID, CGDisplayBounds, CGEvent, CGEventField, CGEventFlags,
+    CGEventTapLocation, CGEventTapOptions, CGEventTapPlacement, CGEventTapProxy, CGEventType,
+    CGGetActiveDisplayList,
 };
 use objc2_foundation::NSSet;
 use scopeguard::ScopeGuard;
@@ -12,6 +13,7 @@ use std::ffi::c_void;
 use std::marker::PhantomPinned;
 use std::pin::Pin;
 use std::ptr::null_mut;
+use std::time::Instant;
 use stdext::function_name;
 use tracing::{error, info};
 
@@ -19,6 +21,40 @@ use crate::config::Config;
 use crate::errors::{Error, Result};
 use crate::events::{Event, EventSender};
 use crate::platform::Modifiers;
+
+/// Which edge of a display the cursor is stuck to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum StickyEdge {
+    Left,
+    Right,
+    Top,
+    Bottom,
+}
+
+/// Tracks an active sticky-edge state during a drag near a display boundary.
+struct StickyEdgeState {
+    /// Which edge.
+    edge: StickyEdge,
+    /// When the cursor first hit this edge.
+    entered_at: Instant,
+}
+
+/// Query active display bounds via Core Graphics.
+fn get_active_display_bounds() -> Vec<(CGDirectDisplayID, CGRect)> {
+    let mut count = 0u32;
+    unsafe { CGGetActiveDisplayList(0, null_mut(), &raw mut count) };
+    if count == 0 {
+        return vec![];
+    }
+    let mut ids = Vec::with_capacity(count as usize);
+    unsafe {
+        CGGetActiveDisplayList(count, ids.as_mut_ptr(), &raw mut count);
+        ids.set_len(count as usize);
+    }
+    ids.into_iter()
+        .map(|id| (id, CGDisplayBounds(id)))
+        .collect()
+}
 
 /// `InputHandler` manages low-level input events from the macOS `CGEventTap`.
 /// It intercepts keyboard and mouse events, processes gestures, and dispatches them as higher-level `Event`s.
@@ -31,6 +67,8 @@ pub(super) struct InputHandler {
     finger_position: Option<Retained<NSSet<NSTouch>>>,
     /// The `CFMachPort` representing the `CGEventTap`.
     tap_port: Option<CFRetained<CFMachPort>>,
+    /// Active sticky edge state during drag near a display boundary.
+    sticky_edge: Option<StickyEdgeState>,
     // Prevents from being Unpin automatically
     _pin: PhantomPinned,
 }
@@ -55,6 +93,7 @@ impl InputHandler {
             config,
             finger_position: None,
             tap_port: None,
+            sticky_edge: None,
             _pin: PhantomPinned,
         }
     }
@@ -165,6 +204,17 @@ impl InputHandler {
     ///
     /// `true` if the event should be intercepted (not passed further), `false` otherwise.
     fn input_handler(&mut self, event_type: CGEventType, event: &CGEvent) -> bool {
+        // Handle sticky edge state mutations before borrowing self.events.
+        match event_type {
+            CGEventType::LeftMouseUp | CGEventType::RightMouseUp => {
+                self.sticky_edge = None;
+            }
+            CGEventType::LeftMouseDragged | CGEventType::RightMouseDragged => {
+                self.clamp_sticky_edge(event);
+            }
+            _ => {}
+        }
+
         let Some(events) = &self.events else {
             return false;
         };
@@ -199,7 +249,12 @@ impl InputHandler {
                 // handle_keypress can intercept the event, so it may return true.
                 return self.handle_keypress(keycode, eventflags);
             }
-            _ => self.handle_swipe(event),
+            _ => {
+                if self.should_suppress_gesture(event) {
+                    return true;
+                }
+                self.handle_swipe(event)
+            }
         };
         if let Err(err) = result {
             error!("error sending event: {err}");
@@ -209,6 +264,20 @@ impl InputHandler {
         }
         // Do not intercept this event, let it fall through.
         false
+    }
+
+    /// Returns true if this is a 5-finger gesture that should be suppressed.
+    fn should_suppress_gesture(&self, event: &CGEvent) -> bool {
+        if !self.config.suppress_five_finger_gestures() {
+            return false;
+        }
+        let Some(ns_event) = NSEvent::eventWithCGEvent(event) else {
+            return false;
+        };
+        if ns_event.r#type() != NSEventType::Gesture {
+            return false;
+        }
+        ns_event.allTouches().len() == 5
     }
 
     /// Handles swipe gesture events.
@@ -300,5 +369,123 @@ impl InputHandler {
                     .ok()
             })
             .is_some()
+    }
+
+    /// During `MouseDragged`, if the cursor is at a display edge with a snap
+    /// zone enabled and another display is adjacent, clamp the event position
+    /// to prevent crossing for the configured dwell period.
+    fn clamp_sticky_edge(&mut self, event: &CGEvent) {
+        if !self.config.edge_snap_any_enabled() {
+            self.sticky_edge = None;
+            return;
+        }
+        let dwell = self.config.edge_snap_sticky_dwell();
+        if dwell.is_zero() {
+            self.sticky_edge = None;
+            return;
+        }
+
+        let point = CGEvent::location(Some(event));
+        let threshold = f64::from(self.config.edge_snap_threshold());
+        let displays = get_active_display_bounds();
+
+        if displays.len() < 2 {
+            self.sticky_edge = None;
+            return;
+        }
+
+        // Find which display contains the cursor.
+        let current = displays.iter().find(|(_, b)| {
+            point.x >= b.origin.x
+                && point.x < b.origin.x + b.size.width
+                && point.y >= b.origin.y
+                && point.y < b.origin.y + b.size.height
+        });
+
+        let Some(&(_, current_bounds)) = current else {
+            self.sticky_edge = None;
+            return;
+        };
+
+        let snap_cfg = self.config.edge_snap();
+
+        // Check each edge: is the cursor near it, is a snap zone enabled for
+        // that edge, and is there an adjacent display on that side?
+        let near_right = snap_cfg.right.unwrap_or(false)
+            && (current_bounds.origin.x + current_bounds.size.width - point.x) < threshold
+            && displays.iter().any(|(_, b)| {
+                (b.origin.x - (current_bounds.origin.x + current_bounds.size.width)).abs() < 2.0
+            });
+
+        let near_left = snap_cfg.left.unwrap_or(false)
+            && (point.x - current_bounds.origin.x) < threshold
+            && displays.iter().any(|(_, b)| {
+                ((b.origin.x + b.size.width) - current_bounds.origin.x).abs() < 2.0
+            });
+
+        let near_bottom = snap_cfg.bottom.unwrap_or(false)
+            && (current_bounds.origin.y + current_bounds.size.height - point.y) < threshold
+            && displays.iter().any(|(_, b)| {
+                (b.origin.y - (current_bounds.origin.y + current_bounds.size.height)).abs() < 2.0
+            });
+
+        let near_top = snap_cfg.top.unwrap_or(false)
+            && (point.y - current_bounds.origin.y) < threshold
+            && displays.iter().any(|(_, b)| {
+                ((b.origin.y + b.size.height) - current_bounds.origin.y).abs() < 2.0
+            });
+
+        let detected_edge = if near_right {
+            Some(StickyEdge::Right)
+        } else if near_left {
+            Some(StickyEdge::Left)
+        } else if near_bottom {
+            Some(StickyEdge::Bottom)
+        } else if near_top {
+            Some(StickyEdge::Top)
+        } else {
+            None
+        };
+
+        let Some(edge) = detected_edge else {
+            self.sticky_edge = None;
+            return;
+        };
+
+        // Start or continue the sticky state.
+        let state = self.sticky_edge.get_or_insert_with(|| StickyEdgeState {
+            edge,
+            entered_at: Instant::now(),
+        });
+
+        // If the edge changed, reset.
+        if state.edge != edge {
+            *state = StickyEdgeState {
+                edge,
+                entered_at: Instant::now(),
+            };
+        }
+
+        // If dwell has expired, let through.
+        if state.entered_at.elapsed() >= dwell {
+            self.sticky_edge = None;
+            return;
+        }
+
+        // Clamp the cursor to stay within the current display.
+        let clamped = match edge {
+            StickyEdge::Right => CGPoint::new(
+                current_bounds.origin.x + current_bounds.size.width - 1.0,
+                point.y,
+            ),
+            StickyEdge::Left => CGPoint::new(current_bounds.origin.x, point.y),
+            StickyEdge::Bottom => CGPoint::new(
+                point.x,
+                current_bounds.origin.y + current_bounds.size.height - 1.0,
+            ),
+            StickyEdge::Top => CGPoint::new(point.x, current_bounds.origin.y),
+        };
+
+        CGEvent::set_location(Some(event), clamped);
     }
 }

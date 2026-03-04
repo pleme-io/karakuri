@@ -1441,7 +1441,7 @@ fn detect_snap_zone(
 
 /// Computes the origin and size for a snap zone within display bounds,
 /// accounting for edge padding.
-fn snap_frame(zone: SnapZone, bounds: &IRect, pad: (i32, i32, i32, i32)) -> (Origin, Size) {
+pub(crate) fn snap_frame(zone: SnapZone, bounds: &IRect, pad: (i32, i32, i32, i32)) -> (Origin, Size) {
     let (pt, pr, pb, pl) = pad;
     let x = bounds.min.x + pl;
     let y = bounds.min.y + pt;

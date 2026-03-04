@@ -426,6 +426,24 @@ impl Config {
             || s.fullscreen.unwrap_or(false)
     }
 
+    pub fn edge_snap_preview_enabled(&self) -> bool {
+        self.options().edge_snap.preview.unwrap_or(true) && self.edge_snap_any_enabled()
+    }
+
+    pub fn edge_snap_preview_opacity(&self) -> f64 {
+        self.options().edge_snap.preview_opacity.unwrap_or(0.15)
+    }
+
+    pub fn edge_snap_sticky_dwell(&self) -> std::time::Duration {
+        std::time::Duration::from_millis(self.options().edge_snap.sticky_dwell_ms.unwrap_or(300))
+    }
+
+    /// Returns true if any 5-finger gesture suppression is enabled.
+    pub fn suppress_five_finger_gestures(&self) -> bool {
+        let g = &self.options().gesture_suppress;
+        g.five_finger_pinch.unwrap_or(false) || g.five_finger_spread.unwrap_or(false)
+    }
+
     pub fn scripting(&self) -> Option<ScriptingConfig> {
         self.inner().scripting.clone()
     }
@@ -607,6 +625,17 @@ pub enum SwipeGestureDirection {
     Reversed,
 }
 
+/// Configuration for suppressing 5-finger trackpad gestures.
+/// macOS maps 5-finger pinch to Launchpad and 5-finger spread to Show Desktop.
+/// Enabling either option prevents macOS from acting on those gestures.
+#[derive(Deserialize, Clone, Debug, Default)]
+pub struct GestureSuppress {
+    /// Suppress 5-finger pinch gesture (Launchpad). Default: false.
+    pub five_finger_pinch: Option<bool>,
+    /// Suppress 5-finger spread gesture (Show Desktop). Default: false.
+    pub five_finger_spread: Option<bool>,
+}
+
 /// Configuration for edge snapping in floating mode.
 /// Each field enables snapping to a specific screen zone when the cursor is near
 /// that edge on mouse-up.
@@ -624,6 +653,13 @@ pub struct EdgeSnapConfig {
     pub fullscreen: Option<bool>,
     /// Pixel distance from edge to trigger snap. Default: 10.
     pub threshold: Option<u16>,
+    /// Show a translucent preview of the snap zone during drag. Default: true.
+    pub preview: Option<bool>,
+    /// Opacity of the snap preview fill (0.0–1.0). Default: 0.15.
+    pub preview_opacity: Option<f64>,
+    /// Dwell time (ms) cursor sticks at display edges during drag. Default: 300.
+    /// Set to 0 to disable sticky edges.
+    pub sticky_dwell_ms: Option<u64>,
 }
 
 /// `MainOptions` represents the primary configuration options for the window manager.
@@ -710,6 +746,11 @@ pub struct MainOptions {
     /// Dragging a window to a screen edge and releasing snaps it to fill that zone.
     #[serde(default)]
     pub edge_snap: EdgeSnapConfig,
+
+    /// 5-finger gesture suppression.
+    /// Prevents macOS Launchpad (pinch) and Show Desktop (spread) triggers.
+    #[serde(default)]
+    pub gesture_suppress: GestureSuppress,
 }
 
 /// Returns a default set of column widths.
