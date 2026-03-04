@@ -134,6 +134,11 @@ fn sync_snapshot(
         displays: display_snapshots,
         focused_window: focused_window_snapshot,
         config_flags: ConfigFlags {
+            mode: match options.mode {
+                crate::config::WindowMode::Tiling => "tiling".to_string(),
+                crate::config::WindowMode::Floating => "floating".to_string(),
+            },
+            enable_manage_toggle: options.enable_manage_toggle.unwrap_or(true),
             focus_follows_mouse: options.focus_follows_mouse.is_none_or(|v| v),
             mouse_follows_focus: options.mouse_follows_focus.is_none_or(|v| v),
             auto_center: options.auto_center.is_some_and(|v| v),

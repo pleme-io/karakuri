@@ -53,6 +53,8 @@ pub struct BoundsSnapshot {
 #[derive(Serialize, Clone, Default)]
 #[allow(clippy::struct_excessive_bools)]
 pub struct ConfigFlags {
+    pub mode: String,
+    pub enable_manage_toggle: bool,
     pub focus_follows_mouse: bool,
     pub mouse_follows_focus: bool,
     pub auto_center: bool,

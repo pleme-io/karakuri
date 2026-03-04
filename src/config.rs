@@ -392,6 +392,23 @@ impl Config {
             .clamp(1.0, 10.0)
     }
 
+    pub fn mode(&self) -> &WindowMode {
+        // Can't return a reference into the guard, so we match and return a static ref.
+        // Safe because the enum is simple and we only need equality checks.
+        match self.options().mode {
+            WindowMode::Tiling => &WindowMode::Tiling,
+            WindowMode::Floating => &WindowMode::Floating,
+        }
+    }
+
+    pub fn is_floating_mode(&self) -> bool {
+        self.options().mode == WindowMode::Floating
+    }
+
+    pub fn enable_manage_toggle(&self) -> bool {
+        self.options().enable_manage_toggle.unwrap_or(true)
+    }
+
     pub fn scripting(&self) -> Option<ScriptingConfig> {
         self.inner().scripting.clone()
     }
@@ -556,6 +573,17 @@ impl InnerConfig {
     }
 }
 
+/// Window management mode: tiling (automatic column layout) or floating (free positioning).
+#[derive(Clone, Debug, Deserialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum WindowMode {
+    /// Windows are automatically arranged in a column layout.
+    #[default]
+    Tiling,
+    /// Windows are free-positioned (standard macOS behavior).
+    Floating,
+}
+
 #[derive(Clone, Debug, Deserialize)]
 pub enum SwipeGestureDirection {
     Natural,
@@ -566,6 +594,13 @@ pub enum SwipeGestureDirection {
 /// These options control various behaviors such as mouse focus, gesture recognition, and window animation.
 #[derive(Deserialize, Clone, Debug, Default)]
 pub struct MainOptions {
+    /// Window management mode: "tiling" (default) or "floating".
+    /// In floating mode all windows are free-positioned; the tiling layout is disabled.
+    #[serde(default)]
+    pub mode: WindowMode,
+    /// Allow the `window_manage` keybinding to toggle individual windows between
+    /// tiled and floating. When false the keybinding is ignored. Default: true.
+    pub enable_manage_toggle: Option<bool>,
     /// Enables or disables focus follows mouse behavior.
     pub focus_follows_mouse: Option<bool>,
     /// Enables or disables mouse follows focus behavior.

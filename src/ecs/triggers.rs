@@ -1227,8 +1227,8 @@ fn apply_window_properties(
         .find_map(|props| props.dont_focus)
         .unwrap_or(false);
 
-    if floating {
-        // Avoid managing window if it's floating.
+    // In floating mode all windows are free-positioned.
+    if floating || config.config().is_floating_mode() {
         commands.entity(entity).try_insert(Unmanaged::Floating);
         return;
     }

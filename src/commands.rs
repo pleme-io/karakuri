@@ -608,11 +608,21 @@ fn full_width_window(
 /// * `windows` - A mutable query for `Window` components, their `Entity`, and whether they have the `Unmanaged` marker.
 /// * `commands` - Bevy commands to modify entities.
 #[allow(clippy::needless_pass_by_value)]
-fn manage_window(mut messages: MessageReader<Event>, windows: Windows, mut commands: Commands) {
+fn manage_window(
+    mut messages: MessageReader<Event>,
+    windows: Windows,
+    config: Res<Config>,
+    mut commands: Commands,
+) {
     if filter_window_operations(&mut messages, |op| matches!(op, Operation::Manage))
         .next()
         .is_none()
     {
+        return;
+    }
+
+    if !config.enable_manage_toggle() {
+        debug!("manage toggle disabled by configuration");
         return;
     }
 
