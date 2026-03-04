@@ -11,12 +11,13 @@ use stdext::function_name;
 use stdext::prelude::RwLockExt;
 use tracing::{Level, debug, instrument};
 
-use crate::commands::{Command, Direction, Operation, register_commands};
+use crate::commands::{Command, Direction, Operation};
 use crate::config::Config;
 use crate::ecs::{
     BProcess, ExistingMarker, FocusFollowsMouse, FocusedMarker, Initializing, MissionControlActive,
-    PollForNotifications, SkipReshuffle, SpawnWindowTrigger, register_systems, register_triggers,
+    PollForNotifications, SkipReshuffle, SpawnWindowTrigger,
 };
+use crate::plugins::WindowPlugin;
 use crate::errors::{Error, Result};
 use crate::events::Event;
 use crate::manager::{
@@ -521,7 +522,7 @@ fn setup_world() -> App {
         .insert_resource(FocusFollowsMouse(None))
         .insert_resource(Config::default())
         .insert_resource(Initializing)
-        .add_plugins((register_triggers, register_systems, register_commands));
+        .add_plugins(WindowPlugin);
 
     bevy_app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_millis(
         100,
@@ -955,6 +956,188 @@ fn test_offscreen_windows_preserve_height() {
     let window_manager = MockWindowManager { windows };
     bevy.world_mut()
         .insert_resource(WindowManager(Box::new(window_manager)));
+
+    run_main_loop(&mut bevy, &internal_queue, &commands, check);
+}
+
+/// When `focus_follows_mouse` and `mouse_follows_focus` are both disabled,
+/// mouse events (move, click, drag) must not cause any window reshuffle
+/// or position change. Keyboard navigation must still work normally.
+#[test]
+fn test_mouse_disconnected_no_reshuffle() {
+    // First settle the layout, then fire mouse events and verify no change.
+    let commands = vec![
+        Event::MenuOpened { window_id: 0 }, // Settle initial layout
+        Event::Command {
+            command: Command::Window(Operation::Focus(Direction::First)),
+        },
+        // Mouse events that should be no-ops when disconnected:
+        Event::MouseMoved {
+            point: CGPoint::new(50.0, 50.0),
+        },
+        Event::MouseDown {
+            point: CGPoint::new(50.0, 50.0),
+        },
+        Event::MouseDragged {
+            point: CGPoint::new(100.0, 100.0),
+        },
+        // Fire another focus command to verify keyboard still works.
+        Event::Command {
+            command: Command::Window(Operation::Focus(Direction::East)),
+        },
+    ];
+
+    let expected_after_settle = [
+        (4, (0, TEST_MENUBAR_HEIGHT)),
+        (3, (400, TEST_MENUBAR_HEIGHT)),
+        (2, (800, TEST_MENUBAR_HEIGHT)),
+    ];
+
+    let expected_after_east = [
+        (4, (-176, TEST_MENUBAR_HEIGHT)),
+        (3, (224, TEST_MENUBAR_HEIGHT)),
+        (2, (624, TEST_MENUBAR_HEIGHT)),
+    ];
+
+    let settled_positions: std::cell::RefCell<Vec<(WinID, (i32, i32))>> =
+        std::cell::RefCell::new(Vec::new());
+
+    let check = |iteration, world: &mut World| {
+        match iteration {
+            1 => {
+                // After Focus(First) — capture settled positions.
+                verify_window_positions(&expected_after_settle, world);
+                let mut query = world.query::<&Window>();
+                let mut positions = Vec::new();
+                for window in query.iter(world) {
+                    positions.push((window.id(), (window.frame().min.x, window.frame().min.y)));
+                }
+                *settled_positions.borrow_mut() = positions;
+            }
+            2 | 3 | 4 => {
+                // After MouseMoved, MouseDown, MouseDragged — positions must not change.
+                let settled = settled_positions.borrow();
+                verify_window_positions(&settled, world);
+            }
+            5 => {
+                // After Focus(East) — keyboard navigation still works.
+                verify_window_positions(&expected_after_east, world);
+            }
+            _ => {}
+        }
+    };
+
+    let mut bevy = setup_world();
+    let mock_app = setup_process(bevy.world_mut());
+    let internal_queue = Arc::new(RwLock::new(Vec::<Event>::new()));
+    let event_queue = internal_queue.clone();
+
+    let windows = Box::new(move |_| {
+        (0..5)
+            .map(|i| {
+                let origin = Origin::new(100 * i, 0);
+                let size = Size::new(TEST_WINDOW_WIDTH, TEST_WINDOW_HEIGHT);
+                let window = MockWindow::new(
+                    i,
+                    IRect {
+                        min: origin,
+                        max: origin + size,
+                    },
+                    event_queue.clone(),
+                    mock_app.clone(),
+                );
+                Window::new(Box::new(window))
+            })
+            .collect::<Vec<_>>()
+    });
+    let window_manager = MockWindowManager { windows };
+    bevy.world_mut()
+        .insert_resource(WindowManager(Box::new(window_manager)));
+
+    // Mouse fully disconnected: both FFM and MFF disabled.
+    let config: Config = r#"
+[options]
+focus_follows_mouse = false
+mouse_follows_focus = false
+auto_center = false
+[bindings]
+"#
+    .try_into()
+    .unwrap();
+    bevy.insert_resource(config);
+
+    run_main_loop(&mut bevy, &internal_queue, &commands, check);
+}
+
+/// Verify that `MouseDown` on a partially off-screen window does NOT
+/// trigger a reshuffle when mouse is disconnected from tiling.
+#[test]
+fn test_mouse_disconnected_click_offscreen_no_reshuffle() {
+    let offscreen_left = 0 - TEST_WINDOW_WIDTH + 5;
+
+    let commands = vec![
+        Event::MenuOpened { window_id: 0 }, // Settle
+        Event::Command {
+            command: Command::Window(Operation::Focus(Direction::Last)),
+        },
+        // Click on the off-screen region — should NOT reshuffle.
+        Event::MouseDown {
+            point: CGPoint::new(2.0, f64::from(TEST_MENUBAR_HEIGHT + 10)),
+        },
+    ];
+
+    let expected_positions_last = [
+        (4, (offscreen_left, TEST_MENUBAR_HEIGHT)),
+        (3, (offscreen_left, TEST_MENUBAR_HEIGHT)),
+        (2, (-176, TEST_MENUBAR_HEIGHT)),
+        (1, (224, TEST_MENUBAR_HEIGHT)),
+        (0, (624, TEST_MENUBAR_HEIGHT)),
+    ];
+
+    let check = |iteration, world: &mut World| {
+        if iteration >= 1 {
+            // Positions should remain at Focus(Last) layout — click must not reshuffle.
+            verify_window_positions(&expected_positions_last, world);
+        }
+    };
+
+    let mut bevy = setup_world();
+    let mock_app = setup_process(bevy.world_mut());
+    let internal_queue = Arc::new(RwLock::new(Vec::<Event>::new()));
+    let event_queue = internal_queue.clone();
+
+    let windows = Box::new(move |_| {
+        (0..5)
+            .map(|i| {
+                let origin = Origin::new(100 * i, 0);
+                let size = Size::new(TEST_WINDOW_WIDTH, TEST_WINDOW_HEIGHT);
+                let window = MockWindow::new(
+                    i,
+                    IRect {
+                        min: origin,
+                        max: origin + size,
+                    },
+                    event_queue.clone(),
+                    mock_app.clone(),
+                );
+                Window::new(Box::new(window))
+            })
+            .collect::<Vec<_>>()
+    });
+    let window_manager = MockWindowManager { windows };
+    bevy.world_mut()
+        .insert_resource(WindowManager(Box::new(window_manager)));
+
+    let config: Config = r#"
+[options]
+focus_follows_mouse = false
+mouse_follows_focus = false
+auto_center = false
+[bindings]
+"#
+    .try_into()
+    .unwrap();
+    bevy.insert_resource(config);
 
     run_main_loop(&mut bevy, &internal_queue, &commands, check);
 }

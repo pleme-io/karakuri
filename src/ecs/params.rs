@@ -142,6 +142,12 @@ impl Configuration<'_> {
         self.mission_control_active.0
     }
 
+    /// Returns `true` when mouse is fully disconnected from tiling.
+    /// Both `focus_follows_mouse` and `mouse_follows_focus` must be disabled.
+    pub fn mouse_disconnected(&self) -> bool {
+        !self.focus_follows_mouse() && !self.mouse_follows_focus()
+    }
+
     pub fn initializing(&self) -> bool {
         self.initializing.is_some()
     }

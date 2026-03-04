@@ -141,13 +141,13 @@ pub(crate) fn mouse_down_trigger(
     windows: Windows,
     active_display: ActiveDisplay,
     window_manager: Res<WindowManager>,
-    mission_control_active: Res<MissionControlActive>,
+    mut config: Configuration,
     mut commands: Commands,
 ) {
     let Event::MouseDown { point } = trigger.event().0 else {
         return;
     };
-    if mission_control_active.0 {
+    if config.mission_control_active() {
         return;
     }
     trace!("{point:?}");
@@ -163,6 +163,14 @@ pub(crate) fn mouse_down_trigger(
 
     // Stop any ongoing scroll.
     commands.remove_resource::<TrackpadSwipe>();
+
+    // When mouse is fully disconnected from tiling, suppress the reshuffle
+    // that would otherwise be triggered by the macOS-native WindowFocused event
+    // following this click.
+    if config.mouse_disconnected() {
+        config.set_skip_reshuffle(true);
+        return;
+    }
 
     if window.frame().min.x < 0
         || window.frame().min.x > active_display.bounds().width() - window.frame().width()
@@ -186,14 +194,19 @@ pub(crate) fn mouse_dragged_trigger(
     windows: Windows,
     mut drag_marker: Query<(&mut Timeout, &mut WindowDraggedMarker)>,
     window_manager: Res<WindowManager>,
-    mission_control_active: Res<MissionControlActive>,
+    config: Configuration,
     mut commands: Commands,
 ) {
     const DRAG_MARKER_TIMEOUT_MS: u64 = 1000;
     let Event::MouseDragged { point } = trigger.event().0 else {
         return;
     };
-    if mission_control_active.0 {
+    if config.mission_control_active() {
+        return;
+    }
+    // When mouse is disconnected from tiling, don't track drags —
+    // prevents `reposition_dragged_window` from reshuffling the layout.
+    if config.mouse_disconnected() {
         return;
     }
 
