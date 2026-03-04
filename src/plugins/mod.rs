@@ -5,6 +5,7 @@ pub mod hotkey;
 pub mod menu_bar;
 pub mod notification;
 pub mod scripting;
+pub mod snapshot;
 pub mod window;
 
 pub use app_lifecycle::AppLifecyclePlugin;
@@ -14,4 +15,5 @@ pub use hotkey::HotkeyPlugin;
 pub use menu_bar::MenuBarPlugin;
 pub use notification::NotificationPlugin;
 pub use scripting::ScriptingPlugin;
+pub use snapshot::SnapshotPlugin;
 pub use window::WindowPlugin;

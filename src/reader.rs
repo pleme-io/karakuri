@@ -1,17 +1,24 @@
 use std::io::{Read, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
+use std::sync::Arc;
 use std::{fs, thread};
+
+use arc_swap::ArcSwap;
 use tracing::{debug, error};
 
 use crate::config::parse_command;
 use crate::errors::Result;
 use crate::events::{Event, EventSender};
+use crate::snapshot::StateSnapshot;
+
+const QUERY_PREFIX: &[u8] = b"query\0";
 
 /// `CommandReader` is responsible for sending and receiving commands via a Unix socket.
 /// It acts as an IPC mechanism for the `karakuri` application, allowing external processes
 /// or the CLI client to communicate with the running daemon.
 pub struct CommandReader {
     events: EventSender,
+    shared_state: Arc<ArcSwap<StateSnapshot>>,
 }
 
 impl CommandReader {
@@ -20,14 +27,6 @@ impl CommandReader {
 
     /// Sends a command and its arguments to the running `karakuri` application via a Unix socket.
     /// The arguments are serialized and sent as a byte stream.
-    ///
-    /// # Arguments
-    ///
-    /// * `params` - An iterator over command-line arguments, where each `String` is a parameter.
-    ///
-    /// # Returns
-    ///
-    /// `Ok(())` if the command is sent successfully, otherwise `Err(Error)` if an I/O error occurs or the connection fails.
     pub fn send_command(params: impl IntoIterator<Item = String>) -> Result<()> {
         let output = params
             .into_iter()
@@ -42,17 +41,31 @@ impl CommandReader {
         Ok(())
     }
 
+    /// Sends a query to the running daemon and returns the JSON response.
+    pub fn send_query(query: &str) -> Result<String> {
+        let msg = format!("query\0{query}");
+        let msg_bytes = msg.as_bytes();
+        let size: u32 = msg_bytes.len().try_into()?;
+
+        let mut stream = UnixStream::connect(CommandReader::SOCKET_PATH)?;
+        stream.write_all(&size.to_le_bytes())?;
+        stream.write_all(msg_bytes)?;
+
+        // Read response: 4-byte LE u32 length + JSON bytes
+        let mut len_buf = [0u8; 4];
+        stream.read_exact(&mut len_buf)?;
+        let resp_len = u32::from_le_bytes(len_buf) as usize;
+        let mut resp_buf = vec![0u8; resp_len];
+        stream.read_exact(&mut resp_buf)?;
+        Ok(String::from_utf8_lossy(&resp_buf).to_string())
+    }
+
     /// Creates a new `CommandReader` instance.
-    ///
-    /// # Arguments
-    ///
-    /// * `events` - An `EventSender` to dispatch received commands as `Event::Command`.
-    ///
-    /// # Returns
-    ///
-    /// A new `CommandReader`.
-    pub fn new(events: EventSender) -> Self {
-        CommandReader { events }
+    pub fn new(events: EventSender, shared_state: Arc<ArcSwap<StateSnapshot>>) -> Self {
+        CommandReader {
+            events,
+            shared_state,
+        }
     }
 
     /// Starts the `CommandReader` in a new thread, listening for incoming commands on a Unix socket.
@@ -65,14 +78,7 @@ impl CommandReader {
         });
     }
 
-    /// The main runner function for the `CommandReader` thread. It binds to a Unix socket,
-    /// listens for incoming connections, reads command size and data, and dispatches them as `Event::Command`.
-    /// This loop continues indefinitely until an unrecoverable error occurs.
-    ///
-    /// # Returns
-    ///
-    /// `Ok(())` if the runner completes successfully (though it's typically a long-running loop),
-    /// otherwise `Err(Error)` if a binding or I/O error occurs.
+    /// The main runner function for the `CommandReader` thread.
     fn runner(&mut self) -> Result<()> {
         _ = fs::remove_file(CommandReader::SOCKET_PATH);
         let listener = UnixListener::bind(CommandReader::SOCKET_PATH)?;
@@ -92,6 +98,14 @@ impl CommandReader {
             if !full_read(&mut stream, buffer.len(), &mut buffer) {
                 continue;
             }
+
+            // Query messages start with "query\0" — respond with JSON.
+            if buffer.starts_with(QUERY_PREFIX) {
+                self.handle_query(&mut stream, &buffer[QUERY_PREFIX.len()..]);
+                continue;
+            }
+
+            // Existing fire-and-forget command dispatch.
             let argv = buffer
                 .split(|c| *c == 0)
                 .filter(|s| !s.is_empty())
@@ -111,6 +125,26 @@ impl CommandReader {
             }
         }
         Ok(())
+    }
+
+    fn handle_query(&self, stream: &mut UnixStream, query_bytes: &[u8]) {
+        let query = String::from_utf8_lossy(query_bytes);
+        // Trim trailing null bytes from the query
+        let query = query.trim_end_matches('\0');
+        let snapshot = self.shared_state.load();
+
+        let response = match query {
+            "state" => serde_json::to_string(&**snapshot),
+            "focused" => serde_json::to_string(&snapshot.focused_window),
+            "displays" => serde_json::to_string(&snapshot.displays),
+            "config" => serde_json::to_string(&snapshot.config_flags),
+            _ => Ok(r#"{"error":"unknown query"}"#.to_string()),
+        };
+
+        let json = response.unwrap_or_else(|e| format!(r#"{{"error":"{e}"}}"#));
+        let len = (json.len() as u32).to_le_bytes();
+        _ = stream.write_all(&len);
+        _ = stream.write_all(json.as_bytes());
     }
 }
 

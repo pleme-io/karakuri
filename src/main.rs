@@ -9,10 +9,12 @@ mod ecs;
 mod errors;
 mod events;
 mod manager;
+mod mcp;
 mod overlay;
 mod platform;
 mod plugins;
 mod reader;
+mod snapshot;
 mod util;
 
 #[cfg(test)]
@@ -74,6 +76,9 @@ pub enum SubCmd {
         #[arg(trailing_var_arg = true)]
         cmd: Vec<String>,
     },
+
+    /// Run as MCP server (stdio transport) for Claude Code integration.
+    Mcp,
 }
 
 /// The main entry point of the `karakuri` application.
@@ -102,8 +107,9 @@ fn main() -> Result<()> {
     match Karakuri::parse().subcmd.unwrap_or_default() {
         SubCmd::Launch => {
             let (sender, receiver) = EventSender::new();
-            CommandReader::new(sender.clone()).start();
-            setup_bevy_app(sender, receiver)?.run();
+            let (mut app, shared_state) = setup_bevy_app(sender.clone(), receiver)?;
+            CommandReader::new(sender, shared_state).start();
+            app.run();
         }
         SubCmd::Install => service()?.install()?,
         SubCmd::Uninstall => service()?.uninstall()?,
@@ -112,6 +118,11 @@ fn main() -> Result<()> {
         SubCmd::Stop => service()?.stop()?,
         SubCmd::Restart => service()?.restart()?,
         SubCmd::SendCmd { cmd } => CommandReader::send_command(cmd)?,
+        SubCmd::Mcp => {
+            let rt = tokio::runtime::Runtime::new()?;
+            rt.block_on(mcp::run())
+                .map_err(|e| errors::Error::Generic(e.to_string()))?;
+        }
     }
     Ok(())
 }

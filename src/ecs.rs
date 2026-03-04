@@ -1,6 +1,8 @@
+use std::sync::Arc;
 use std::sync::mpsc::Receiver;
 use std::time::Duration;
 
+use arc_swap::ArcSwap;
 use bevy::MinimalPlugins;
 use bevy::app::App as BevyApp;
 use bevy::ecs::message::Messages;
@@ -14,6 +16,8 @@ use bevy::ecs::{component::Component, entity::Entity};
 use derive_more::{Deref, DerefMut};
 use objc2_core_graphics::CGDirectDisplayID;
 
+use crate::snapshot::StateSnapshot;
+
 use crate::config::CONFIGURATION_FILE;
 use crate::errors::Result;
 use crate::events::{Event, EventSender};
@@ -24,7 +28,7 @@ use crate::overlay::OverlayManager;
 use crate::platform::{PlatformCallbacks, WinID};
 use crate::plugins::{
     AppLifecyclePlugin, ClipboardPlugin, DisplayPlugin, HotkeyPlugin, MenuBarPlugin,
-    NotificationPlugin, ScriptingPlugin, WindowPlugin,
+    NotificationPlugin, ScriptingPlugin, SnapshotPlugin, WindowPlugin,
 };
 
 pub mod params;
@@ -245,9 +249,17 @@ pub fn reshuffle_around(entity: Entity, commands: &mut Commands) {
     }
 }
 
-pub fn setup_bevy_app(sender: EventSender, receiver: Receiver<Event>) -> Result<BevyApp> {
+pub fn setup_bevy_app(
+    sender: EventSender,
+    receiver: Receiver<Event>,
+) -> Result<(BevyApp, Arc<ArcSwap<StateSnapshot>>)> {
     let window_manager: Box<dyn WindowManagerApi> = Box::new(WindowManagerOS::new(sender.clone()));
     let watcher = window_manager.setup_config_watcher(CONFIGURATION_FILE.as_path())?;
+
+    // Create the shared snapshot before building the app, so we can hand
+    // the same Arc to both the SnapshotPlugin (Bevy writer) and the
+    // CommandReader (socket reader).
+    let shared_state = Arc::new(ArcSwap::from_pointee(StateSnapshot::default()));
 
     let mut app = BevyApp::new();
     app.add_plugins(MinimalPlugins)
@@ -259,6 +271,7 @@ pub fn setup_bevy_app(sender: EventSender, receiver: Receiver<Event>) -> Result<
         .insert_resource(FocusFollowsMouse(None))
         .insert_resource(PollForNotifications)
         .insert_resource(Initializing)
+        .insert_resource(crate::plugins::snapshot::SharedState(shared_state.clone()))
         .insert_non_send_resource(watcher)
         .add_plugins((
             WindowPlugin,
@@ -269,6 +282,7 @@ pub fn setup_bevy_app(sender: EventSender, receiver: Receiver<Event>) -> Result<
             ClipboardPlugin,
             NotificationPlugin,
             MenuBarPlugin,
+            SnapshotPlugin,
         ));
 
     let mut platform_callbacks = PlatformCallbacks::new(sender);
@@ -278,5 +292,5 @@ pub fn setup_bevy_app(sender: EventSender, receiver: Receiver<Event>) -> Result<
     app.insert_non_send_resource(overlay_manager);
     app.insert_non_send_resource(receiver);
 
-    Ok(app)
+    Ok((app, shared_state))
 }
