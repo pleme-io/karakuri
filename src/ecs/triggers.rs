@@ -365,6 +365,7 @@ pub(crate) fn active_workspace_trigger(
     mut workspaces: Query<&mut LayoutStrip, With<ChildOf>>,
     apps: Query<&mut Application>,
     window_manager: Res<WindowManager>,
+    config: Res<Config>,
     mut commands: Commands,
 ) {
     let Ok(active_strip) = workspaces.get(trigger.entity) else {
@@ -416,12 +417,12 @@ pub(crate) fn active_workspace_trigger(
         reshuffle_around(entity, &mut commands);
     }
 
-    // Always reshuffle on workspace activation so that windows are
-    // re-laid-out after returning from a different space (e.g. native
-    // fullscreen) where they may have been positioned with stale data.
-    // Prefer the focused window so the viewport centres on what the user
-    // was looking at; fall back to the first column.
-    if !had_moved_windows {
+    // In tiling mode, always reshuffle on workspace activation so that
+    // windows are re-laid-out after returning from a different space
+    // (e.g. native fullscreen) where they may have been positioned with
+    // stale data. In floating mode, skip this — windows should stay where
+    // the user placed them (prevents three-finger swipe from re-snapping).
+    if !had_moved_windows && !config.is_floating_mode() {
         let focused_entity = windows.focused().map(|(_, entity)| entity).filter(|e| {
             workspaces
                 .get(trigger.entity)
@@ -1487,9 +1488,8 @@ pub(crate) fn snap_frame(zone: SnapZone, bounds: &IRect, pad: (i32, i32, i32, i3
 #[allow(clippy::needless_pass_by_value)]
 pub(crate) fn edge_snap_drag_trigger(
     trigger: On<WMEventTrigger>,
-    windows: Windows,
+    drag_marker: Query<&WindowDraggedMarker>,
     displays: Query<&Display>,
-    window_manager: Res<WindowManager>,
     config: Res<Config>,
     snap_state: Option<Res<EdgeSnapState>>,
     mut commands: Commands,
@@ -1501,12 +1501,13 @@ pub(crate) fn edge_snap_drag_trigger(
         return;
     }
 
-    let Some((_window, entity)) = window_manager
-        .0
-        .find_window_at_point(&point)
-        .ok()
-        .and_then(|window_id| windows.find(window_id))
-    else {
+    // Use the entity already tracked by mouse_dragged_trigger instead of
+    // re-querying find_window_at_point. At multi-monitor boundaries the
+    // hit-test can return a window on the adjacent display, causing snap
+    // direction to flip.
+    let entity = if let Ok(marker) = drag_marker.single() {
+        marker.entity
+    } else {
         return;
     };
 
