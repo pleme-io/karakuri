@@ -8,7 +8,7 @@ use bevy::ecs::system::{Commands, Local, NonSend, NonSendMut, Populated, Query, 
 use bevy::math::IRect;
 use bevy::tasks::AsyncComputeTaskPool;
 use bevy::tasks::futures_lite::future;
-use bevy::time::Time;
+use bevy::time::{Time, Timer, TimerMode};
 use objc2_core_graphics::CGDirectDisplayID;
 use std::collections::HashSet;
 use std::pin::Pin;
@@ -25,8 +25,9 @@ use crate::config::{Config, SwipeGestureDirection};
 use crate::ecs::params::{ActiveDisplay, Configuration, SmoothSwipeTracking, Windows};
 use crate::ecs::{
     ActiveWorkspaceMarker, BruteforceWindows, DockPosition, Initializing, LocateDockTrigger,
-    ReshuffleAroundMarker, StackAdjustedResize, TrackpadSwipe, Unmanaged, WindowDraggedMarker,
-    WindowSwipeMarker, reposition_entity, reshuffle_around, resize_entity,
+    ReshuffleAroundMarker, StackAdjustedResize, StartupAppLaunch, StartupPending, TrackpadSwipe,
+    Unmanaged, WindowDraggedMarker, WindowSwipeMarker, reposition_entity, reshuffle_around,
+    resize_entity,
 };
 use crate::events::Event;
 use crate::manager::{
@@ -299,6 +300,49 @@ pub(crate) fn finish_setup(
     }
 
     commands.remove_resource::<Initializing>();
+    commands.insert_resource(StartupPending);
+}
+
+/// Spawns timer entities for each configured startup app, then removes `StartupPending`.
+#[allow(clippy::needless_pass_by_value)]
+pub(crate) fn spawn_startup_apps(config: Res<Config>, mut commands: Commands) {
+    let apps = config.startup_apps();
+    if apps.is_empty() {
+        info!("No startup apps configured.");
+    } else {
+        for app in &apps {
+            info!("Queuing startup app '{}' with {:.1}s delay", app.app, app.delay);
+            commands.spawn(StartupAppLaunch {
+                app: app.app.clone(),
+                timer: Timer::from_seconds(app.delay as f32, TimerMode::Once),
+            });
+        }
+    }
+    commands.remove_resource::<StartupPending>();
+}
+
+/// Ticks startup app timers each frame and launches the app when the timer finishes.
+#[allow(clippy::needless_pass_by_value)]
+pub(crate) fn startup_app_ticker(
+    time: Res<Time>,
+    mut query: Query<(Entity, &mut StartupAppLaunch)>,
+    mut commands: Commands,
+) {
+    for (entity, mut launch) in &mut query {
+        launch.timer.tick(time.delta());
+        if launch.timer.just_finished() {
+            info!("Launching startup app '{}'", launch.app);
+            let cmd = format!("open -a '{}'", launch.app);
+            match std::process::Command::new("/bin/sh")
+                .args(["-c", &cmd])
+                .spawn()
+            {
+                Ok(_) => info!("Started '{}'", launch.app),
+                Err(e) => error!("Failed to launch '{}': {e}", launch.app),
+            }
+            commands.entity(entity).despawn();
+        }
+    }
 }
 
 /// Handles the event when a new application is launched. It creates a `Process` and `Application` object,

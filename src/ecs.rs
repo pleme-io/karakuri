@@ -220,6 +220,17 @@ pub struct PollForNotifications;
 #[derive(PartialEq, Resource)]
 pub struct Initializing;
 
+/// Marker resource inserted after initialization completes, triggering startup app launches.
+#[derive(Resource)]
+pub struct StartupPending;
+
+/// Component for a pending startup app launch with a countdown timer.
+#[derive(Component)]
+pub struct StartupAppLaunch {
+    pub app: String,
+    pub timer: Timer,
+}
+
 /// Bevy event trigger for general window manager events.
 #[derive(BevyEvent)]
 pub struct WMEventTrigger(pub Event);

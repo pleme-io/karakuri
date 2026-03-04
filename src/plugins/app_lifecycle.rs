@@ -5,7 +5,7 @@ use bevy::ecs::schedule::IntoScheduleConfigs;
 use bevy::ecs::schedule::common_conditions::resource_exists;
 use bevy::time::common_conditions::on_timer;
 
-use crate::ecs::{Initializing, PollForNotifications, systems, triggers};
+use crate::ecs::{Initializing, PollForNotifications, StartupPending, systems, triggers};
 
 const DISPLAY_CHANGE_CHECK_FREQ_MS: u64 = 1000;
 
@@ -29,6 +29,9 @@ impl Plugin for AppLifecyclePlugin {
                     .run_if(resource_exists::<Initializing>),
                 systems::add_launched_process,
                 systems::add_launched_application,
+                systems::spawn_startup_apps
+                    .run_if(resource_exists::<StartupPending>),
+                systems::startup_app_ticker,
             ),
         );
 

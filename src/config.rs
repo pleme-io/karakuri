@@ -453,6 +453,10 @@ impl Config {
     pub fn scripting(&self) -> Option<ScriptingConfig> {
         self.inner().scripting.clone()
     }
+
+    pub fn startup_apps(&self) -> Vec<StartupApp> {
+        self.options().startup
+    }
 }
 
 fn parse_hex_color(hex: &str) -> (f64, f64, f64) {
@@ -759,6 +763,20 @@ pub struct MainOptions {
     /// Prevents macOS Launchpad (pinch) and Show Desktop (spread) triggers.
     #[serde(default)]
     pub gesture_suppress: GestureSuppress,
+
+    /// Applications to launch on startup, with optional delays.
+    #[serde(default)]
+    pub startup: Vec<StartupApp>,
+}
+
+/// An application to launch on startup.
+#[derive(Deserialize, Clone, Debug)]
+pub struct StartupApp {
+    /// Application name (passed to `open -a`).
+    pub app: String,
+    /// Delay in seconds before launching (default: 0).
+    #[serde(default)]
+    pub delay: f64,
 }
 
 /// Returns a default set of column widths.
