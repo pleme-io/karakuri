@@ -630,6 +630,10 @@ pub struct MainOptions {
     /// Swipe inertia deceleration rate. Higher values = faster stop.
     /// Range: 1.0–10.0. Default: 4.0.
     pub swipe_deceleration: Option<f64>,
+
+    /// Path to a wallpaper image applied on startup. Supports ~ expansion.
+    /// When set, karakuri sets the desktop wallpaper on all screens at launch.
+    pub wallpaper: Option<String>,
 }
 
 /// Returns a default set of column widths.

@@ -3,7 +3,7 @@ pub mod engine;
 pub mod loader;
 
 use bevy::app::{App, Plugin};
-use tracing::info;
+use tracing::{info, warn};
 
 use engine::ScriptEngine;
 
@@ -36,6 +36,18 @@ impl Plugin for ScriptingPlugin {
         info!(
             "scripting: loaded {script_count} script(s), {hotkey_count} hotkey handler(s)"
         );
+
+        // Apply startup wallpaper from config if set.
+        if let Ok(config) =
+            crate::config::Config::new(crate::config::CONFIGURATION_FILE.as_path())
+            && let Some(ref path) = config.options().wallpaper
+        {
+            if let Err(e) = crate::platform::wallpaper::set_wallpaper_all(path) {
+                warn!("failed to set startup wallpaper: {e}");
+            } else {
+                info!("startup wallpaper set: {path}");
+            }
+        }
 
         app.insert_resource(script_engine);
     }
