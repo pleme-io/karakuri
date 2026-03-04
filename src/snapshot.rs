@@ -61,4 +61,6 @@ pub struct ConfigFlags {
     pub skip_reshuffle: bool,
     pub mission_control_active: bool,
     pub initializing: bool,
+    pub edge_snap_left: bool,
+    pub edge_snap_right: bool,
 }

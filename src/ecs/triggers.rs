@@ -16,12 +16,12 @@ use std::time::Duration;
 use tracing::{Level, debug, error, info, instrument, trace, warn};
 
 use super::{
-    ActiveDisplayMarker, BProcess, FocusedMarker, FreshMarker, MissionControlActive,
-    NativeFullscreenMarker, SpawnWindowTrigger, StrayFocusEvent, Timeout, Unmanaged,
-    WMEventTrigger, WindowDraggedMarker,
+    ActiveDisplayMarker, BProcess, EdgeSnapState, FocusedMarker, FreshMarker,
+    MissionControlActive, NativeFullscreenMarker, SnapZone, SpawnWindowTrigger, StrayFocusEvent,
+    Timeout, Unmanaged, WMEventTrigger, WindowDraggedMarker,
 };
 use crate::commands::ON_FULLSCREEN_SPACE;
-use crate::config::{Config, WindowParams};
+use crate::config::{Config, EdgeSnapConfig, WindowParams};
 use crate::ecs::params::{
     ActiveDisplay, ActiveDisplayMut, Configuration, SmoothSwipeTracking, Windows,
 };
@@ -1407,4 +1407,155 @@ pub(crate) fn send_message_trigger(
 ) {
     let event = &trigger.event().0;
     messages.write(event.clone());
+}
+
+// ── Edge Snapping ──────────────────────────────────────────────────────────
+
+/// Determines which snap zone the cursor is near, if any.
+fn detect_snap_zone(
+    px: i32,
+    py: i32,
+    bounds: &IRect,
+    threshold: i32,
+    snap: &EdgeSnapConfig,
+) -> Option<SnapZone> {
+    let near_left = px - bounds.min.x < threshold;
+    let near_right = bounds.max.x - px < threshold;
+    let near_top = py - bounds.min.y < threshold;
+    let near_bottom = bounds.max.y - py < threshold;
+
+    if near_left && snap.left.unwrap_or(false) {
+        Some(SnapZone::LeftHalf)
+    } else if near_right && snap.right.unwrap_or(false) {
+        Some(SnapZone::RightHalf)
+    } else if near_top && near_left && snap.fullscreen.unwrap_or(false) {
+        Some(SnapZone::Fullscreen)
+    } else if near_top && snap.top.unwrap_or(false) {
+        Some(SnapZone::TopHalf)
+    } else if near_bottom && snap.bottom.unwrap_or(false) {
+        Some(SnapZone::BottomHalf)
+    } else {
+        None
+    }
+}
+
+/// Computes the origin and size for a snap zone within display bounds,
+/// accounting for edge padding.
+fn snap_frame(zone: SnapZone, bounds: &IRect, pad: (i32, i32, i32, i32)) -> (Origin, Size) {
+    let (pt, pr, pb, pl) = pad;
+    let x = bounds.min.x + pl;
+    let y = bounds.min.y + pt;
+    let w = bounds.width() - pl - pr;
+    let h = bounds.height() - pt - pb;
+
+    match zone {
+        SnapZone::LeftHalf => (Origin::new(x, y), Size::new(w / 2, h)),
+        SnapZone::RightHalf => (Origin::new(x + w / 2, y), Size::new(w - w / 2, h)),
+        SnapZone::TopHalf => (Origin::new(x, y), Size::new(w, h / 2)),
+        SnapZone::BottomHalf => (Origin::new(x, y + h / 2), Size::new(w, h - h / 2)),
+        SnapZone::Fullscreen => (Origin::new(x, y), Size::new(w, h)),
+    }
+}
+
+/// Tracks the cursor during a drag and updates `EdgeSnapState` with the
+/// current snap zone. Only active in floating mode with at least one snap
+/// zone enabled.
+#[allow(clippy::needless_pass_by_value)]
+pub(crate) fn edge_snap_drag_trigger(
+    trigger: On<WMEventTrigger>,
+    windows: Windows,
+    displays: Query<&Display>,
+    window_manager: Res<WindowManager>,
+    config: Res<Config>,
+    snap_state: Option<Res<EdgeSnapState>>,
+    mut commands: Commands,
+) {
+    let Event::MouseDragged { point } = trigger.event().0 else {
+        return;
+    };
+    if !config.is_floating_mode() || !config.edge_snap_any_enabled() {
+        return;
+    }
+
+    let Some((_window, entity)) = window_manager
+        .0
+        .find_window_at_point(&point)
+        .ok()
+        .and_then(|window_id| windows.find(window_id))
+    else {
+        return;
+    };
+
+    let px = point.x as i32;
+    let py = point.y as i32;
+    let threshold = config.edge_snap_threshold();
+    let snap_cfg = config.edge_snap();
+
+    // Find the display containing the cursor.
+    let display_hit = displays.iter().find(|d| {
+        let b = d.bounds();
+        px >= b.min.x && px < b.max.x && py >= b.min.y && py < b.max.y
+    });
+
+    let Some(display) = display_hit else {
+        return;
+    };
+
+    let bounds = display.bounds();
+    let zone = detect_snap_zone(px, py, &bounds, threshold, &snap_cfg);
+
+    // Only insert/update when the state actually changes.
+    let needs_update = snap_state
+        .as_ref()
+        .is_none_or(|s| s.entity != entity || s.zone != zone);
+
+    if needs_update {
+        commands.insert_resource(EdgeSnapState {
+            entity,
+            display_id: display.id(),
+            zone,
+        });
+    }
+}
+
+/// On mouse-up, if an `EdgeSnapState` with a zone is present, snap the
+/// window to that zone and remove the state.
+#[allow(clippy::needless_pass_by_value)]
+pub(crate) fn edge_snap_release_trigger(
+    trigger: On<WMEventTrigger>,
+    snap_state: Option<Res<EdgeSnapState>>,
+    displays: Query<&Display>,
+    config: Res<Config>,
+    mut commands: Commands,
+) {
+    let Event::MouseUp { .. } = trigger.event().0 else {
+        return;
+    };
+    let Some(state) = snap_state else {
+        return;
+    };
+
+    let entity = state.entity;
+    let display_id = state.display_id;
+    let zone = state.zone;
+
+    // Always clean up the resource.
+    commands.remove_resource::<EdgeSnapState>();
+
+    let Some(zone) = zone else {
+        return;
+    };
+
+    // Find the display by ID to get its bounds.
+    let Some(display) = displays.iter().find(|d| d.id() == display_id) else {
+        return;
+    };
+
+    let bounds = display.bounds();
+    let pad = config.edge_padding();
+    let (origin, size) = snap_frame(zone, &bounds, pad);
+
+    debug!("edge snap: {zone:?} → origin={origin}, size={size}");
+    reposition_entity(entity, origin, display_id, &mut commands);
+    resize_entity(entity, size, display_id, &mut commands);
 }

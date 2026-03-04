@@ -63,7 +63,9 @@ impl Plugin for WindowPlugin {
             .add_observer(triggers::spawn_window_trigger)
             .add_observer(triggers::stray_focus_observer)
             .add_observer(triggers::window_removal_trigger)
-            .add_observer(triggers::send_message_trigger);
+            .add_observer(triggers::send_message_trigger)
+            .add_observer(triggers::edge_snap_drag_trigger)
+            .add_observer(triggers::edge_snap_release_trigger);
 
         // Command systems
         app.add_plugins(crate::commands::register_commands);

@@ -182,6 +182,25 @@ pub enum DockPosition {
     Hidden,
 }
 
+/// The screen zone a window can snap to when released near a display edge.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SnapZone {
+    LeftHalf,
+    RightHalf,
+    TopHalf,
+    BottomHalf,
+    Fullscreen,
+}
+
+/// Resource tracking an active edge-snap drag. Inserted when a drag enters a
+/// snap zone; removed on mouse-up (after optionally applying the snap).
+#[derive(Resource)]
+pub struct EdgeSnapState {
+    pub entity: Entity,
+    pub display_id: CGDirectDisplayID,
+    pub zone: Option<SnapZone>,
+}
+
 /// Resource to control whether window reshuffling should be skipped.
 #[derive(Resource)]
 pub struct SkipReshuffle(pub bool);

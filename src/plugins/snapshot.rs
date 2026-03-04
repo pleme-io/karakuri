@@ -145,6 +145,8 @@ fn sync_snapshot(
             skip_reshuffle: skip_reshuffle.0,
             mission_control_active: mission_control.0,
             initializing: initializing.is_some(),
+            edge_snap_left: options.edge_snap.left.unwrap_or(false),
+            edge_snap_right: options.edge_snap.right.unwrap_or(false),
         },
     };
 

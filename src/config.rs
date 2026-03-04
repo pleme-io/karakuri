@@ -409,6 +409,23 @@ impl Config {
         self.options().enable_manage_toggle.unwrap_or(true)
     }
 
+    pub fn edge_snap(&self) -> EdgeSnapConfig {
+        self.options().edge_snap.clone()
+    }
+
+    pub fn edge_snap_threshold(&self) -> i32 {
+        i32::from(self.options().edge_snap.threshold.unwrap_or(10)).max(1)
+    }
+
+    pub fn edge_snap_any_enabled(&self) -> bool {
+        let s = self.options().edge_snap;
+        s.left.unwrap_or(false)
+            || s.right.unwrap_or(false)
+            || s.top.unwrap_or(false)
+            || s.bottom.unwrap_or(false)
+            || s.fullscreen.unwrap_or(false)
+    }
+
     pub fn scripting(&self) -> Option<ScriptingConfig> {
         self.inner().scripting.clone()
     }
@@ -590,6 +607,25 @@ pub enum SwipeGestureDirection {
     Reversed,
 }
 
+/// Configuration for edge snapping in floating mode.
+/// Each field enables snapping to a specific screen zone when the cursor is near
+/// that edge on mouse-up.
+#[derive(Deserialize, Clone, Debug, Default)]
+pub struct EdgeSnapConfig {
+    /// Snap to left half of screen.
+    pub left: Option<bool>,
+    /// Snap to right half of screen.
+    pub right: Option<bool>,
+    /// Snap to top half of screen.
+    pub top: Option<bool>,
+    /// Snap to bottom half of screen.
+    pub bottom: Option<bool>,
+    /// Snap to fullscreen.
+    pub fullscreen: Option<bool>,
+    /// Pixel distance from edge to trigger snap. Default: 10.
+    pub threshold: Option<u16>,
+}
+
 /// `MainOptions` represents the primary configuration options for the window manager.
 /// These options control various behaviors such as mouse focus, gesture recognition, and window animation.
 #[derive(Deserialize, Clone, Debug, Default)]
@@ -669,6 +705,11 @@ pub struct MainOptions {
     /// Path to a wallpaper image applied on startup. Supports ~ expansion.
     /// When set, karakuri sets the desktop wallpaper on all screens at launch.
     pub wallpaper: Option<String>,
+
+    /// Edge snapping configuration for floating mode.
+    /// Dragging a window to a screen edge and releasing snaps it to fill that zone.
+    #[serde(default)]
+    pub edge_snap: EdgeSnapConfig,
 }
 
 /// Returns a default set of column widths.
