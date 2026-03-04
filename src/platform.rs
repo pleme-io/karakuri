@@ -23,6 +23,7 @@ pub use process::ProcessSerialNumber;
 pub use workspace::WorkspaceObserver;
 
 mod display;
+pub(crate) mod gestures;
 pub(crate) mod input;
 mod mission_control;
 mod process;
@@ -206,6 +207,7 @@ impl PlatformCallbacks {
         }
 
         let config = Config::new(CONFIGURATION_FILE.as_path())?;
+        gestures::apply_gesture_preferences(&config.options().gesture_suppress);
         self.events.send(Event::InitialConfig(config.clone()))?;
         self.event_handler = Some(InputHandler::new(self.events.clone(), config).start()?);
 

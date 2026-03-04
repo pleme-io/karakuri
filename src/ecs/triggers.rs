@@ -1324,9 +1324,11 @@ pub(crate) fn refresh_configuration_trigger(
             }
         }
         info!("Reloading configuration file; {}", path.display());
-        _ = config.reload_config(path.as_path()).inspect_err(|err| {
+        if config.reload_config(path.as_path()).inspect_err(|err| {
             error!("loading config '{}': {err}", path.display());
-        });
+        }).is_ok() {
+            crate::platform::gestures::apply_gesture_preferences(&config.options().gesture_suppress);
+        }
     }
 }
 
