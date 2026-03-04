@@ -1,5 +1,3 @@
-use std::sync::atomic::{AtomicBool, Ordering};
-
 use bevy::app::PreUpdate;
 use bevy::ecs::entity::{Entity, EntityHashSet};
 use bevy::ecs::hierarchy::ChildOf;
@@ -13,18 +11,14 @@ use tracing::{Level, instrument};
 use crate::config::Config;
 use crate::ecs::params::{ActiveDisplay, ActiveDisplayMut, Windows};
 use crate::ecs::{
-    ActiveDisplayMarker, FocusFollowsMouse, FocusedMarker, FullWidthMarker, SendMessageTrigger,
-    Unmanaged, WMEventTrigger, reposition_entity, reshuffle_around, resize_entity,
+    ActiveDisplayMarker, FocusedMarker, FullWidthMarker, SendMessageTrigger, Unmanaged,
+    WMEventTrigger, reposition_entity, reshuffle_around, resize_entity,
+    state::{FocusContext, FullscreenSpace},
 };
 use crate::events::Event;
 use crate::manager::{
     Application, Column, Display, LayoutStrip, Origin, Size, Window, WindowManager, origin_to,
 };
-
-/// When `true`, the active display is showing a native macOS fullscreen space.
-/// Keybindings are not intercepted so that macOS can handle native space
-/// switching (e.g. Ctrl+arrow, trackpad gestures).
-pub static ON_FULLSCREEN_SPACE: AtomicBool = AtomicBool::new(false);
 
 /// Represents a cardinal or directional choice for window manipulation.
 #[derive(Clone, Debug)]
@@ -228,6 +222,7 @@ fn command_move_focus(
     active_display: ActiveDisplay,
     apps: Query<&Application>,
     fs_windows: Query<(Entity, &crate::ecs::NativeFullscreenMarker)>,
+    fullscreen_space: Res<FullscreenSpace>,
     mut commands: Commands,
 ) {
     let Some(Operation::Focus(direction)) =
@@ -241,7 +236,7 @@ fn command_move_focus(
     // Fullscreen windows are ordered after the tiled strip:
     //   [tiled…] [fs order=0] [fs order=1] …
     // West → previous in chain (or last tiled).  East → next in chain.
-    if ON_FULLSCREEN_SPACE.load(Ordering::Relaxed) {
+    if fullscreen_space.0 {
         let Some(cur) = windows
             .focused()
             .and_then(|(_, e)| fs_windows.get(e).ok())
@@ -328,6 +323,7 @@ fn command_swap_focus(
     windows: Windows,
     apps: Query<&Application>,
     mut active_display: ActiveDisplayMut,
+    fullscreen_space: Res<FullscreenSpace>,
     mut commands: Commands,
 ) {
     let Some(Operation::Swap(direction)) =
@@ -337,7 +333,7 @@ fn command_swap_focus(
     };
 
     // On a fullscreen space, swap just raises the last tiled window.
-    if ON_FULLSCREEN_SPACE.load(Ordering::Relaxed) {
+    if fullscreen_space.0 {
         let strip = active_display.active_strip();
         if let Some(entity) = strip
             .get(strip.len().wrapping_sub(1))
@@ -742,7 +738,7 @@ fn mouse_to_next_display(
     layout_strips: Query<(&LayoutStrip, Entity)>,
     displays: Query<(&Display, Entity, Has<ActiveDisplayMarker>)>,
     window_manager: Res<WindowManager>,
-    mut ffm_flag: ResMut<FocusFollowsMouse>,
+    mut focus_ctx: ResMut<FocusContext>,
     mut commands: Commands,
 ) {
     let Some(direction) = messages.read().find_map(|event| {
@@ -832,7 +828,7 @@ fn mouse_to_next_display(
     commands.entity(other_entity).insert(ActiveDisplayMarker);
 
     let point = origin_to(visible_frame.center());
-    ffm_flag.as_mut().0 = None;
+    focus_ctx.ffm_window = None;
     commands.trigger(WMEventTrigger(Event::MouseMoved { point }));
 }
 

@@ -8,7 +8,8 @@ use bevy::prelude::*;
 use crate::config::Config;
 use crate::ecs::{
     ActiveDisplayMarker, ActiveWorkspaceMarker, DockPosition, FocusedMarker, FullWidthMarker,
-    Initializing, MissionControlActive, SkipReshuffle, Unmanaged,
+    Unmanaged,
+    state::{AppPhase, FocusContext, InteractionMode},
 };
 use crate::manager::{Application, Display, LayoutStrip, Window};
 use crate::snapshot::{
@@ -33,9 +34,9 @@ impl Plugin for SnapshotPlugin {
 #[allow(clippy::needless_pass_by_value, clippy::type_complexity, clippy::too_many_arguments)]
 fn sync_snapshot(
     config: Res<Config>,
-    skip_reshuffle: Res<SkipReshuffle>,
-    mission_control: Res<MissionControlActive>,
-    initializing: Option<Res<Initializing>>,
+    focus_ctx: Res<FocusContext>,
+    interaction_mode: Res<bevy::state::state::State<InteractionMode>>,
+    app_phase: Res<bevy::state::state::State<AppPhase>>,
     displays: Query<(&Display, Entity, Has<ActiveDisplayMarker>, Option<&DockPosition>)>,
     workspaces: Query<(&LayoutStrip, Entity, &ChildOf, Has<ActiveWorkspaceMarker>)>,
     windows: Query<(
@@ -142,9 +143,9 @@ fn sync_snapshot(
             focus_follows_mouse: options.focus_follows_mouse.is_none_or(|v| v),
             mouse_follows_focus: options.mouse_follows_focus.is_none_or(|v| v),
             auto_center: options.auto_center.is_some_and(|v| v),
-            skip_reshuffle: skip_reshuffle.0,
-            mission_control_active: mission_control.0,
-            initializing: initializing.is_some(),
+            skip_reshuffle: focus_ctx.skip_reshuffle(),
+            mission_control_active: *interaction_mode.get() == InteractionMode::MissionControl,
+            initializing: *app_phase.get() == AppPhase::Initializing,
             edge_snap_left: options.edge_snap.left.unwrap_or(false),
             edge_snap_right: options.edge_snap.right.unwrap_or(false),
             edge_snap_preview: options.edge_snap.preview.unwrap_or(true),

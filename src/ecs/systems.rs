@@ -4,15 +4,15 @@ use bevy::ecs::entity::Entity;
 use bevy::ecs::hierarchy::{ChildOf, Children};
 use bevy::ecs::message::{MessageReader, MessageWriter};
 use bevy::ecs::query::{Has, Or, With, Without};
-use bevy::ecs::system::{Commands, Local, NonSend, NonSendMut, Populated, Query, Res, Single};
+use bevy::ecs::system::{Commands, Local, NonSend, NonSendMut, Populated, Query, Res, ResMut, Single};
 use bevy::math::IRect;
 use bevy::tasks::AsyncComputeTaskPool;
 use bevy::tasks::futures_lite::future;
 use bevy::time::{Time, Timer, TimerMode};
 use objc2_core_graphics::CGDirectDisplayID;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::pin::Pin;
-use std::sync::mpsc::{Receiver, RecvTimeoutError};
+use std::sync::mpsc::{Receiver, TryRecvError};
 use std::time::Duration;
 use tracing::{Level, debug, error, info, instrument, trace, warn};
 
@@ -24,10 +24,10 @@ use super::{
 use crate::config::{Config, SwipeGestureDirection};
 use crate::ecs::params::{ActiveDisplay, Configuration, SmoothSwipeTracking, Windows};
 use crate::ecs::{
-    ActiveWorkspaceMarker, BruteforceWindows, DockPosition, Initializing, LocateDockTrigger,
-    ReshuffleAroundMarker, StackAdjustedResize, StartupAppLaunch, StartupPending, TrackpadSwipe,
-    Unmanaged, WindowDraggedMarker, WindowSwipeMarker, reposition_entity, reshuffle_around,
-    resize_entity,
+    ActiveWorkspaceMarker, BruteforceWindows, DockPosition, LocateDockTrigger,
+    ReshuffleAroundMarker, StackAdjustedResize, StartupAppLaunch, Unmanaged,
+    WindowDraggedMarker, WindowSwipeMarker, reposition_entity, reshuffle_around, resize_entity,
+    state::{AppPhase, DragContext, InteractionMode, ReloadGuard, SwipeContext},
 };
 use crate::events::Event;
 use crate::manager::{
@@ -215,7 +215,7 @@ pub(crate) fn add_existing_application(
 /// * `displays` - A query for all `Display` entities, including whether they have the `ActiveDisplayMarker`.
 /// * `window_manager` - The `WindowManager` resource for refreshing displays and getting active space information.
 /// * `commands` - Bevy commands to insert components like `FocusedMarker`.
-#[allow(clippy::needless_pass_by_value)]
+#[allow(clippy::needless_pass_by_value, clippy::too_many_arguments)]
 #[instrument(level = Level::DEBUG, skip_all)]
 pub(crate) fn finish_setup(
     process_query: Query<Entity, With<ExistingMarker>>,
@@ -224,6 +224,7 @@ pub(crate) fn finish_setup(
     mut bruteforce_tasks: Query<(Entity, &mut BruteforceWindows)>,
     mut workspaces: Query<(&mut LayoutStrip, Has<ActiveWorkspaceMarker>)>,
     window_manager: Res<WindowManager>,
+    mut next_phase: ResMut<bevy::state::state::NextState<AppPhase>>,
     mut commands: Commands,
 ) {
     if !process_query.is_empty() {
@@ -299,13 +300,16 @@ pub(crate) fn finish_setup(
         }
     }
 
-    commands.remove_resource::<Initializing>();
-    commands.insert_resource(StartupPending);
+    next_phase.set(AppPhase::StartupPending);
 }
 
 /// Spawns timer entities for each configured startup app, then removes `StartupPending`.
 #[allow(clippy::needless_pass_by_value)]
-pub(crate) fn spawn_startup_apps(config: Res<Config>, mut commands: Commands) {
+pub(crate) fn spawn_startup_apps(
+    config: Res<Config>,
+    mut next_phase: ResMut<bevy::state::state::NextState<AppPhase>>,
+    mut commands: Commands,
+) {
     let apps = config.startup_apps();
     if apps.is_empty() {
         info!("No startup apps configured.");
@@ -318,7 +322,7 @@ pub(crate) fn spawn_startup_apps(config: Res<Config>, mut commands: Commands) {
             });
         }
     }
-    commands.remove_resource::<StartupPending>();
+    next_phase.set(AppPhase::Running);
 }
 
 /// Ticks startup app timers each frame and launches the app when the timer finishes.
@@ -692,15 +696,16 @@ pub(crate) fn animate_windows(
     windows: Populated<(&mut Window, Entity, &RepositionMarker)>,
     displays: Query<&Display>,
     swipe_tracker: SmoothSwipeTracking,
+    reload_guard: Option<Res<ReloadGuard>>,
     time: Res<Time>,
     config: Res<Config>,
     mut commands: Commands,
 ) {
     let move_ratio = config.animation_speed() * time.delta_secs_f64();
-    let swiping = swipe_tracker.sliding();
+    let instant_snap = swipe_tracker.sliding() || reload_guard.is_some();
 
     for (mut window, entity, RepositionMarker { origin, display_id }) in windows {
-        if swiping {
+        if instant_snap {
             window.reposition(*origin);
             commands.entity(entity).try_remove::<RepositionMarker>();
             continue;
@@ -744,11 +749,23 @@ pub(crate) fn animate_windows(
 pub(crate) fn animate_resize_windows(
     windows: Populated<(&mut Window, Entity, &ResizeMarker, Has<RepositionMarker>)>,
     displays: Query<&Display>,
+    reload_guard: Option<Res<ReloadGuard>>,
     time: Res<Time>,
     config: Res<Config>,
     mut commands: Commands,
 ) {
+    let instant_snap = reload_guard.is_some();
+
     for (mut window, entity, ResizeMarker { size, display_id }, moving) in windows {
+        if instant_snap {
+            let Some(display) = displays.iter().find(|d| d.id() == *display_id) else {
+                continue;
+            };
+            window.resize(*size, display.width());
+            commands.entity(entity).try_remove::<ResizeMarker>();
+            continue;
+        }
+
         if moving {
             // Defer resize while the window is being repositioned so it
             // doesn't extend past the screen edge before the move lands.
@@ -784,7 +801,7 @@ pub(crate) fn animate_resize_windows(
     }
 }
 
-#[allow(clippy::needless_pass_by_value)]
+#[allow(clippy::needless_pass_by_value, clippy::too_many_arguments)]
 pub(crate) fn window_swiper(
     sliding: Populated<(Entity, Has<Unmanaged>, &WindowSwipeMarker)>,
     windows: Query<(&Window, Option<&RepositionMarker>, Option<&ResizeMarker>)>,
@@ -792,6 +809,7 @@ pub(crate) fn window_swiper(
     config: Res<Config>,
     time: Res<Time>,
     swipe_tracker: SmoothSwipeTracking,
+    mut next_mode: ResMut<bevy::state::state::NextState<InteractionMode>>,
     mut commands: Commands,
 ) {
     let get_window_frame = |entity| get_moving_window_frame(entity, &active_display, &windows);
@@ -870,6 +888,7 @@ pub(crate) fn window_swiper(
             &get_window_h_pad,
             &config,
             true,
+            None,
             &mut commands,
         );
 
@@ -883,6 +902,7 @@ pub(crate) fn window_swiper(
         let velocity = 0.3 * new_velocity + 0.7 * old_velocity;
 
         SmoothSwipeTracking::refresh(velocity, clamped_offset, &mut commands);
+        next_mode.set(InteractionMode::Swiping);
     }
 }
 
@@ -903,6 +923,7 @@ pub(crate) fn swipe_idle_tracker(
     window_manager: Res<WindowManager>,
     config: Res<Config>,
     time: Res<Time>,
+    mut next_mode: ResMut<bevy::state::state::NextState<InteractionMode>>,
     mut commands: Commands,
 ) {
     /// Sub-pixel velocity threshold — stop inertia when below this.
@@ -931,7 +952,8 @@ pub(crate) fn swipe_idle_tracker(
         // (~33ms at 60fps) so echo-backs and macOS reconciliation events
         // are silenced before the resource is removed.
         debug!("swipe cooldown done, removing SwipeActive");
-        commands.remove_resource::<TrackpadSwipe>();
+        commands.remove_resource::<SwipeContext>();
+        next_mode.set(InteractionMode::Idle);
         return;
     }
 
@@ -979,6 +1001,7 @@ pub(crate) fn swipe_idle_tracker(
         &get_window_h_pad,
         &config,
         true,
+        None,
         &mut commands,
     );
 
@@ -1025,6 +1048,48 @@ fn expose_window(
     Some(frame)
 }
 
+/// Ticks the reload guard each frame. When the settle counter reaches zero,
+/// strips all in-flight animation markers and fires a single consolidated
+/// reshuffle. Runs only when `ReloadGuard` exists.
+#[allow(clippy::needless_pass_by_value, clippy::type_complexity)]
+pub(crate) fn reload_guard_ticker(
+    mut guard: ResMut<ReloadGuard>,
+    markers: Query<Entity, Or<(With<RepositionMarker>, With<ResizeMarker>)>>,
+    focused: Query<Entity, With<FocusedMarker>>,
+    active_display: ActiveDisplay,
+    mut commands: Commands,
+) {
+    if !guard.tick() {
+        // Not settled yet — strip in-flight markers to prevent mid-animation jitter.
+        for entity in &markers {
+            if let Ok(mut cmd) = commands.get_entity(entity) {
+                cmd.try_remove::<RepositionMarker>();
+                cmd.try_remove::<ResizeMarker>();
+            }
+        }
+        return;
+    }
+
+    // Settled: strip all animation markers and fire a single consolidated reshuffle.
+    for entity in &markers {
+        if let Ok(mut cmd) = commands.get_entity(entity) {
+            cmd.try_remove::<RepositionMarker>();
+            cmd.try_remove::<ResizeMarker>();
+        }
+    }
+
+    // Pick the focused window (if it's in the strip) or fallback to first in the strip.
+    let strip = active_display.active_strip();
+    let target = focused
+        .iter()
+        .find(|e| strip.index_of(*e).is_ok())
+        .or_else(|| strip.get(0).ok().and_then(|col| col.top()));
+
+    if let Some(entity) = target {
+        reshuffle_around(entity, &mut commands);
+    }
+}
+
 #[allow(clippy::needless_pass_by_value)]
 #[instrument(level = Level::DEBUG, skip_all)]
 pub(crate) fn reshuffle_layout_strip(
@@ -1032,9 +1097,16 @@ pub(crate) fn reshuffle_layout_strip(
     active_display: ActiveDisplay,
     windows: Query<(&Window, Option<&RepositionMarker>, Option<&ResizeMarker>)>,
     config: Res<Config>,
-    swipe_tracker: SmoothSwipeTracking,
+    reload_guard: Option<Res<ReloadGuard>>,
     mut commands: Commands,
 ) {
+    // Always clean up markers to prevent accumulation, but suppress the
+    // actual layout pass while a reload guard is active and not yet settled.
+    let guard_active = reload_guard
+        .as_ref()
+        .is_some_and(|g| !g.settled());
+    let pre_positions = reload_guard.as_ref().map(|g| &g.pre_positions);
+
     let get_window_frame = |entity| get_moving_window_frame(entity, &active_display, &windows);
     let get_window_h_pad = |entity: Entity| {
         windows
@@ -1049,13 +1121,9 @@ pub(crate) fn reshuffle_layout_strip(
             cmd.try_remove::<ReshuffleAroundMarker>();
         }
 
-        // After a swipe, windows may be at their legitimate scrolled positions
-        // (off-screen).  expose_window would bump them to the display edge,
-        // resetting viewport_offset ≈ 0 and causing a visible snap-to-home.
-        // Suppress reshuffles for a grace period after the swipe ends.
-        if swipe_tracker.active() {
-            debug!("Suppressing reshuffle marker due to a swipe");
-            return;
+        if guard_active {
+            debug!("Suppressing reshuffle during reload guard");
+            continue;
         }
 
         let Some(frame) = expose_window(
@@ -1086,8 +1154,14 @@ pub(crate) fn reshuffle_layout_strip(
             &get_window_h_pad,
             &config,
             false,
+            pre_positions,
             &mut commands,
         );
+    }
+
+    // Remove the guard after the consolidated layout pass.
+    if reload_guard.is_some_and(|g| g.settled()) {
+        commands.remove_resource::<ReloadGuard>();
     }
 }
 
@@ -1118,10 +1192,12 @@ pub(crate) fn pump_events(
     };
     platform.pump_cocoa_event_loop(f64::from(effective_timeout) / 1000.0);
     let mut swipe_acc: Option<Vec<f64>> = None;
+    let mut received_any = false;
     loop {
-        // Repeatedly drain the events until timeout.
-        match incoming_events.recv_timeout(Duration::from_millis(1)) {
-            Ok(Event::Exit) | Err(RecvTimeoutError::Disconnected) => {
+        // Non-blocking drain: the Cocoa pump already waited for events;
+        // we just collect whatever is queued without blocking the main thread.
+        match incoming_events.try_recv() {
+            Ok(Event::Exit) | Err(TryRecvError::Disconnected) => {
                 exit.write(AppExit::Success);
                 break;
             }
@@ -1134,17 +1210,21 @@ pub(crate) fn pump_events(
                     }
                     None => swipe_acc = Some(deltas),
                 }
-                *timeout = LOOP_TIMEOUT_STEP;
+                received_any = true;
             }
             Ok(event) => {
                 messages.write(event);
-                *timeout = LOOP_TIMEOUT_STEP;
+                received_any = true;
             }
-            Err(RecvTimeoutError::Timeout) => {
-                *timeout = timeout.min(LOOP_MAX_TIMEOUT_MS) + LOOP_TIMEOUT_STEP;
+            Err(TryRecvError::Empty) => {
                 break;
             }
         }
+    }
+    if received_any {
+        *timeout = LOOP_TIMEOUT_STEP;
+    } else {
+        *timeout = timeout.min(LOOP_MAX_TIMEOUT_MS) + LOOP_TIMEOUT_STEP;
     }
     if let Some(deltas) = swipe_acc {
         messages.write(Event::Swipe { deltas });
@@ -1449,7 +1529,7 @@ fn get_display_height(active_display: &ActiveDisplay) -> i32 {
     active_display.bounds().height() - dock_size
 }
 
-#[allow(clippy::cast_possible_truncation)]
+#[allow(clippy::cast_possible_truncation, clippy::too_many_arguments)]
 fn position_layout_windows<W, P>(
     viewport_offset: i32,
     active_display: &ActiveDisplay,
@@ -1457,6 +1537,7 @@ fn position_layout_windows<W, P>(
     get_window_h_pad: &P,
     config: &Config,
     swiping: bool,
+    pre_positions: Option<&HashMap<Entity, IRect>>,
     commands: &mut Commands,
 ) where
     W: Fn(Entity) -> Option<IRect>,
@@ -1560,6 +1641,16 @@ fn position_layout_windows<W, P>(
             frame.max.y += menubar_height + pad_top;
         }
 
+        // During a reload, skip markers for windows whose target matches
+        // their pre-reload position — they don't need to move at all.
+        if let Some(pre) = pre_positions
+            && let Some(pre_frame) = pre.get(&entity)
+            && pre_frame.min == frame.min
+            && pre_frame.size() == frame.size()
+        {
+            continue;
+        }
+
         if old_frame.size() != frame.size() {
             resize_entity(
                 entity,
@@ -1578,20 +1669,8 @@ fn position_layout_windows<W, P>(
 #[allow(clippy::needless_pass_by_value)]
 pub(crate) fn reposition_dragged_window(
     markers: Populated<(&Timeout, &WindowDraggedMarker, Entity)>,
-    swipe_tracker: SmoothSwipeTracking,
     mut commands: Commands,
 ) {
-    // After a swipe, stale drag markers would cause reshuffle_layout_strip
-    // to snap the viewport home (expose_window bumps off-screen entities
-    // to the display edge, resetting viewport_offset ≈ 0).  Grace period
-    // covers the 1s drag-marker timeout.
-    if swipe_tracker.active() {
-        for (_, _, marker_entity) in &markers {
-            commands.entity(marker_entity).despawn();
-        }
-        return;
-    }
-
     for (
         timeout,
         WindowDraggedMarker {
@@ -1613,7 +1692,6 @@ pub(crate) fn update_overlays(
     windows: Windows,
     applications: Query<&Application>,
     _: ActiveDisplay, // prevents this system from running without an active workspace
-    swipe_tracker: SmoothSwipeTracking,
     overlay_mgr: Option<NonSendMut<OverlayManager>>,
     config: Configuration,
 ) {
@@ -1626,17 +1704,6 @@ pub(crate) fn update_overlays(
 
     let dim_opacity = config.config().dim_inactive_opacity();
     let border_enabled = config.config().border_active_window();
-
-    // Hide overlays during swipe, mission control, native fullscreen spaces,
-    // or briefly after a space change (macOS space-switch animation).
-    let swiping = swipe_tracker.sliding() || swipe_tracker.active();
-    // ON_FULLSCREEN_SPACE is set in workspace_change_trigger because this
-    // system cannot run when no LayoutStrip has ActiveWorkspaceMarker
-    // (which is the case on native fullscreen spaces).
-    if swiping || config.mission_control_active() {
-        overlay_mgr.hide_all();
-        return;
-    }
 
     if dim_opacity == 0.0 && !border_enabled {
         overlay_mgr.remove_all();
@@ -1700,10 +1767,10 @@ pub(crate) fn update_overlays(
     );
 }
 
-/// Shows/hides the snap preview overlay based on `EdgeSnapState`.
+/// Shows/hides the snap preview overlay based on `DragContext`.
 #[allow(clippy::needless_pass_by_value)]
 pub(crate) fn update_snap_preview(
-    snap_state: Option<Res<super::EdgeSnapState>>,
+    drag_ctx: Option<Res<DragContext>>,
     displays: Query<&Display>,
     config: Res<Config>,
     overlay_mgr: Option<NonSendMut<OverlayManager>>,
@@ -1721,14 +1788,14 @@ pub(crate) fn update_snap_preview(
         return;
     }
 
-    let zone = snap_state.as_ref().and_then(|s| s.zone);
+    let zone = drag_ctx.as_ref().and_then(|s| s.snap_zone);
 
     let Some(zone) = zone else {
         overlay_mgr.hide_snap_preview();
         return;
     };
 
-    let display_id = snap_state.as_ref().unwrap().display_id;
+    let display_id = drag_ctx.as_ref().unwrap().display_id;
     let Some(display) = displays.iter().find(|d| d.id() == display_id) else {
         overlay_mgr.hide_snap_preview();
         return;
@@ -1752,4 +1819,29 @@ pub(crate) fn update_snap_preview(
     };
 
     overlay_mgr.update_snap_preview(abs_cg_frame, opacity, &border);
+}
+
+/// Despawns stale `WindowDraggedMarker` entities during a swipe.
+///
+/// Gated with `run_if(in_state(Swiping))` — replaces the manual
+/// `swipe_tracker.active()` guard that was previously inside
+/// `reposition_dragged_window`.
+pub(crate) fn swipe_cleanup_drag_markers(
+    markers: Query<Entity, With<WindowDraggedMarker>>,
+    mut commands: Commands,
+) {
+    for entity in &markers {
+        commands.entity(entity).despawn();
+    }
+}
+
+/// Hides all overlays while Swiping or MissionControl is active.
+///
+/// Counterpart to `update_overlays`, which now only runs outside those modes.
+pub(crate) fn hide_overlays_on_mode_change(
+    overlay_mgr: Option<NonSendMut<OverlayManager>>,
+) {
+    if let Some(mut overlay_mgr) = overlay_mgr {
+        overlay_mgr.hide_all();
+    }
 }

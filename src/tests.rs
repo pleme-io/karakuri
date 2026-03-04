@@ -1,10 +1,15 @@
-use std::sync::{Arc, OnceLock, RwLock};
+use std::sync::{Arc, Mutex, OnceLock, RwLock};
 use std::time::Duration;
 
 use super::*;
 use bevy::prelude::*;
 use bevy::tasks::{AsyncComputeTaskPool, TaskPoolBuilder};
 use bevy::time::TimeUpdateStrategy;
+
+/// Bevy's global thread pools (ComputeTaskPool, IoTaskPool) and MinimalPlugins
+/// are not safe to initialize from multiple threads simultaneously. This mutex
+/// serializes all integration tests that create a Bevy App.
+static TEST_MUTEX: Mutex<()> = Mutex::new(());
 use objc2_core_foundation::{CFRetained, CGPoint};
 use objc2_core_graphics::CGDirectDisplayID;
 use stdext::function_name;
@@ -14,8 +19,8 @@ use tracing::{Level, debug, instrument};
 use crate::commands::{Command, Direction, Operation};
 use crate::config::Config;
 use crate::ecs::{
-    BProcess, ExistingMarker, FocusFollowsMouse, FocusedMarker, Initializing, MissionControlActive,
-    PollForNotifications, SkipReshuffle, SpawnWindowTrigger,
+    BProcess, ExistingMarker, FocusedMarker, PollForNotifications, SpawnWindowTrigger,
+    state::{AppPhase, FocusContext, InteractionMode},
 };
 use crate::plugins::WindowPlugin;
 use crate::errors::{Error, Result};
@@ -515,13 +520,13 @@ fn setup_world() -> App {
     let mut bevy_app = App::new();
     bevy_app
         .add_plugins(MinimalPlugins)
+        .add_plugins(bevy::state::app::StatesPlugin)
         .init_resource::<Messages<Event>>()
         .insert_resource(PollForNotifications)
-        .insert_resource(SkipReshuffle(false))
-        .insert_resource(MissionControlActive(false))
-        .insert_resource(FocusFollowsMouse(None))
+        .init_resource::<FocusContext>()
         .insert_resource(Config::default())
-        .insert_resource(Initializing)
+        .init_state::<AppPhase>()
+        .init_state::<InteractionMode>()
         .add_plugins(WindowPlugin);
 
     bevy_app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_millis(
@@ -624,6 +629,7 @@ fn verify_window_sizes(expected_sizes: &[(WinID, (i32, i32))], world: &mut World
 #[test]
 #[allow(clippy::too_many_lines)]
 fn test_window_shuffle() {
+    let _lock = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     let commands = vec![
         Event::MenuOpened { window_id: 0 }, // Noop allowing everything to settle
         Event::Command {
@@ -737,6 +743,7 @@ fn test_window_shuffle() {
 
 #[test]
 fn test_startup_windows() {
+    let _lock = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     let commands = vec![
         Event::MenuOpened { window_id: 0 }, // Noop allowing everything to settle
         Event::Command {
@@ -803,6 +810,7 @@ fn test_startup_windows() {
 
 #[test]
 fn test_dont_focus() {
+    let _lock = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     let commands = vec![
         Event::MenuOpened { window_id: 0 }, // Noop allowing everything to settle
         Event::Command {
@@ -907,6 +915,7 @@ index = 100
 /// resize when they came into focus.
 #[test]
 fn test_offscreen_windows_preserve_height() {
+    let _lock = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     let expected_height = TEST_DISPLAY_HEIGHT - TEST_MENUBAR_HEIGHT;
 
     let commands = vec![
@@ -965,6 +974,7 @@ fn test_offscreen_windows_preserve_height() {
 /// or position change. Keyboard navigation must still work normally.
 #[test]
 fn test_mouse_disconnected_no_reshuffle() {
+    let _lock = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     // First settle the layout, then fire mouse events and verify no change.
     let commands = vec![
         Event::MenuOpened { window_id: 0 }, // Settle initial layout
@@ -1073,6 +1083,7 @@ auto_center = false
 /// trigger a reshuffle when mouse is disconnected from tiling.
 #[test]
 fn test_mouse_disconnected_click_offscreen_no_reshuffle() {
+    let _lock = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     let offscreen_left = 0 - TEST_WINDOW_WIDTH + 5;
 
     let commands = vec![
@@ -1138,6 +1149,257 @@ auto_center = false
     .try_into()
     .unwrap();
     bevy.insert_resource(config);
+
+    run_main_loop(&mut bevy, &internal_queue, &commands, check);
+}
+
+// -----------------------------------------------------------------------
+// Regression tests for atomicity & parallelism refactor
+// -----------------------------------------------------------------------
+
+/// Regression: FocusContext must be mutable only through `ConfigurationMut`,
+/// not through `Configuration` (read-only). This tests the state machine
+/// transitions deterministically — no pipeline dependencies, no race conditions.
+///
+/// State machine under test:
+///   FocusContext { source: Keyboard, ffm_window: None }
+///     → set_skip_reshuffle(true) → { source: Mouse, ffm_window: None }
+///     → set_ffm_flag(Some(42))   → { source: Mouse, ffm_window: Some(42) }
+///     → set_skip_reshuffle(false) → { source: Keyboard, ffm_window: Some(42) }
+///     → set_ffm_flag(None)        → { source: Keyboard, ffm_window: None }  (back to initial)
+#[test]
+fn test_configuration_read_write_split() {
+    use bevy::ecs::system::RunSystemOnce;
+    use crate::ecs::params::{Configuration, ConfigurationMut};
+    use crate::ecs::state::{AppPhase, FocusContext, FocusSource, InteractionMode};
+
+    let _lock = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+
+    // Minimal app: only the resources needed for Configuration/ConfigurationMut.
+    let mut app = App::new();
+    app.add_plugins(bevy::state::app::StatesPlugin);
+    app.init_resource::<FocusContext>();
+    app.insert_resource(Config::default());
+    app.init_state::<AppPhase>();
+    app.init_state::<InteractionMode>();
+    // One update to finalize state initialization.
+    app.update();
+
+    // Initial state: Keyboard, no FFM window.
+    let ctx = app.world().resource::<FocusContext>();
+    assert_eq!(ctx.source, FocusSource::Keyboard);
+    assert_eq!(ctx.ffm_window, None);
+
+    // Transition 1: ConfigurationMut sets skip_reshuffle(true) → source becomes Mouse.
+    app.world_mut()
+        .run_system_once(|mut config: ConfigurationMut| {
+            assert_eq!(config.ffm_flag(), None);
+            assert!(!config.skip_reshuffle());
+            config.set_skip_reshuffle(true);
+        })
+        .unwrap();
+    let ctx = app.world().resource::<FocusContext>();
+    assert_eq!(ctx.source, FocusSource::Mouse, "set_skip_reshuffle(true) → Mouse");
+
+    // Transition 2: ConfigurationMut sets ffm_flag.
+    app.world_mut()
+        .run_system_once(|mut config: ConfigurationMut| {
+            config.set_ffm_flag(Some(42));
+        })
+        .unwrap();
+    let ctx = app.world().resource::<FocusContext>();
+    assert_eq!(ctx.ffm_window, Some(42), "set_ffm_flag(Some(42))");
+    assert_eq!(ctx.source, FocusSource::Mouse, "source unchanged");
+
+    // Transition 3: ConfigurationMut sets skip_reshuffle(false) → source becomes Keyboard.
+    app.world_mut()
+        .run_system_once(|mut config: ConfigurationMut| {
+            config.set_skip_reshuffle(false);
+        })
+        .unwrap();
+    let ctx = app.world().resource::<FocusContext>();
+    assert_eq!(ctx.source, FocusSource::Keyboard, "set_skip_reshuffle(false) → Keyboard");
+    assert_eq!(ctx.ffm_window, Some(42), "ffm_window unchanged");
+
+    // Transition 4: Reset ffm_flag → back to initial state.
+    app.world_mut()
+        .run_system_once(|mut config: ConfigurationMut| {
+            config.set_ffm_flag(None);
+        })
+        .unwrap();
+    let ctx = app.world().resource::<FocusContext>();
+    assert_eq!(ctx.source, FocusSource::Keyboard);
+    assert_eq!(ctx.ffm_window, None, "back to initial state");
+
+    // Read-only Configuration can observe but not mutate (compile-time guarantee).
+    // Verify that read-only Configuration sees the same state.
+    app.world_mut()
+        .run_system_once(|config: Configuration| {
+            assert!(!config.skip_reshuffle());
+            assert_eq!(config.ffm_flag(), None);
+            assert!(config.focus_follows_mouse());
+            assert!(config.mouse_follows_focus());
+            assert!(!config.auto_center());
+            assert!(!config.mission_control_active());
+            assert!(config.initializing());
+        })
+        .unwrap();
+
+    // Verify state was not mutated by the read-only system.
+    let ctx = app.world().resource::<FocusContext>();
+    assert_eq!(ctx.source, FocusSource::Keyboard, "read-only Configuration did not mutate source");
+    assert_eq!(ctx.ffm_window, None, "read-only Configuration did not mutate ffm_window");
+}
+
+/// Regression: dispatch_toplevel_triggers must route events written as
+/// messages to WMEventTrigger observers. This test verifies the event
+/// dispatch state machine deterministically using a marker to confirm
+/// the trigger fired.
+///
+/// State machine under test:
+///   Event written as Message
+///     → dispatch_toplevel_triggers reads it
+///     → fires WMEventTrigger(event)
+///     → observer receives WMEventTrigger
+///
+/// In tests, pump_events is a no-op (no platform/receiver), so events
+/// are injected directly via write_message. The chain() ordering between
+/// pump_events and dispatch_toplevel_triggers ensures that in production,
+/// pump_events writes before dispatch reads — this is a structural guarantee
+/// that cannot be tested in the mock environment. Instead, we verify
+/// that the dispatch→observer pipeline works correctly.
+#[test]
+fn test_event_dispatch_pipeline() {
+    use bevy::ecs::observer::On;
+    use crate::ecs::WMEventTrigger;
+
+    let _lock = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+
+    // Marker resource to verify trigger fired.
+    #[derive(Resource, Default)]
+    struct TriggerFired(Vec<String>);
+
+    let mut bevy = setup_world();
+
+    // Insert the trigger-fired marker and a mock WindowManager (required by systems).
+    bevy.world_mut().insert_resource(TriggerFired::default());
+    let event_queue: EventQueue = Arc::new(RwLock::new(Vec::new()));
+    let eq = event_queue.clone();
+    let mock_app = MockApplication::new(ProcessSerialNumber { high: 1, low: 2 }, TEST_PROCESS_ID);
+    let windows: Box<dyn Fn(WorkspaceId) -> Vec<Window> + Send + Sync> =
+        Box::new(move |_| {
+            let origin = Origin::new(0, 0);
+            let size = Size::new(TEST_WINDOW_WIDTH, TEST_WINDOW_HEIGHT);
+            vec![Window::new(Box::new(MockWindow::new(
+                0,
+                IRect { min: origin, max: origin + size },
+                eq.clone(),
+                mock_app.clone(),
+            )))]
+        });
+    bevy.world_mut()
+        .insert_resource(WindowManager(Box::new(MockWindowManager { windows })));
+
+    // Add an observer that records when WMEventTrigger fires for MenuOpened.
+    bevy.world_mut().add_observer(
+        |trigger: On<WMEventTrigger>, mut fired: ResMut<TriggerFired>| {
+            if let Event::MenuOpened { window_id } = &trigger.event().0 {
+                fired.0.push(format!("MenuOpened:{window_id}"));
+            }
+        },
+    );
+
+    // Before any event: marker should be empty.
+    assert!(bevy.world().resource::<TriggerFired>().0.is_empty());
+
+    // Write a MenuOpened event as a message.
+    bevy.world_mut()
+        .write_message::<Event>(Event::MenuOpened { window_id: 99 });
+
+    // Run one update cycle: dispatch_toplevel_triggers should read the
+    // message and fire WMEventTrigger, which our observer should catch.
+    bevy.update();
+
+    let fired = &bevy.world().resource::<TriggerFired>().0;
+    assert_eq!(
+        fired.len(),
+        1,
+        "Expected exactly one trigger fire, got {fired:?}"
+    );
+    assert_eq!(fired[0], "MenuOpened:99");
+
+    // Write two more events in sequence.
+    bevy.world_mut()
+        .write_message::<Event>(Event::MenuOpened { window_id: 1 });
+    bevy.world_mut()
+        .write_message::<Event>(Event::MenuOpened { window_id: 2 });
+    bevy.update();
+
+    let fired = &bevy.world().resource::<TriggerFired>().0;
+    assert_eq!(
+        fired.len(),
+        3,
+        "Expected three total trigger fires, got {fired:?}"
+    );
+    assert_eq!(fired[1], "MenuOpened:1");
+    assert_eq!(fired[2], "MenuOpened:2");
+}
+
+/// Regression: animate_resize_windows must run after animate_windows.
+/// Verifies that combined reposition+resize produces valid window positions.
+#[test]
+fn test_animation_ordering_resize_after_reposition() {
+    let _lock = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+
+    let mut bevy = setup_world();
+    let mock_app = setup_process(bevy.world_mut());
+    let internal_queue = Arc::new(RwLock::new(Vec::<Event>::new()));
+    let event_queue = internal_queue.clone();
+
+    let windows = Box::new(move |_| {
+        (0..3)
+            .map(|i| {
+                let origin = Origin::new(100 * i, 0);
+                let size = Size::new(TEST_WINDOW_WIDTH, TEST_WINDOW_HEIGHT);
+                Window::new(Box::new(MockWindow::new(
+                    i,
+                    IRect {
+                        min: origin,
+                        max: origin + size,
+                    },
+                    event_queue.clone(),
+                    mock_app.clone(),
+                )))
+            })
+            .collect()
+    });
+    bevy.world_mut()
+        .insert_resource(WindowManager(Box::new(MockWindowManager { windows })));
+
+    let commands = vec![
+        Event::MenuOpened { window_id: 0 },
+        Event::Command {
+            command: Command::Window(Operation::Focus(Direction::First)),
+        },
+        Event::Command {
+            command: Command::Window(Operation::Resize),
+        },
+    ];
+
+    let check = |iteration, world: &mut World| {
+        if iteration == 2 {
+            let mut query = world.query::<&Window>();
+            let windows: Vec<_> = query.iter(world).collect();
+            for window in &windows {
+                assert!(
+                    window.frame().min.x >= -TEST_WINDOW_WIDTH,
+                    "Window {} has invalid x={} after resize+reposition",
+                    window.id(),
+                    window.frame().min.x
+                );
+            }
+        }
+    };
 
     run_main_loop(&mut bevy, &internal_queue, &commands, check);
 }

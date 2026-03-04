@@ -5,6 +5,7 @@ use std::time::Duration;
 use arc_swap::ArcSwap;
 use bevy::MinimalPlugins;
 use bevy::app::App as BevyApp;
+use bevy::state::app::AppExtStates;
 use bevy::ecs::message::Messages;
 use bevy::ecs::resource::Resource;
 use bevy::ecs::system::Commands;
@@ -32,6 +33,7 @@ use crate::plugins::{
 };
 
 pub mod params;
+pub mod state;
 pub(crate) mod systems;
 pub(crate) mod triggers;
 
@@ -93,19 +95,6 @@ pub struct StackAdjustedResize;
 
 #[derive(Component)]
 pub struct WindowSwipeMarker(pub f64);
-
-#[derive(Resource)]
-pub struct TrackpadSwipe {
-    /// Resource indicating that a trackpad swipe gesture is active.
-    /// While present, window repositioning uses fast compositor-level moves
-    /// instead of slow AX API calls. When inertia ends, positions are committed
-    /// to AX and a cooldown keeps the resource alive for a few more ticks
-    /// so that all guard checks (`swipe_active.is_some()`) hold until macOS
-    /// has settled.
-    last_swipe: std::time::Instant,
-    velocity: f64,
-    viewport_offset: i32,
-}
 
 /// Marks a window entity that is currently on a native macOS fullscreen space.
 /// The window has been removed from its tiled position in the strip.
@@ -192,37 +181,9 @@ pub enum SnapZone {
     Fullscreen,
 }
 
-/// Resource tracking an active edge-snap drag. Inserted when a drag enters a
-/// snap zone; removed on mouse-up (after optionally applying the snap).
-#[derive(Resource)]
-pub struct EdgeSnapState {
-    pub entity: Entity,
-    pub display_id: CGDirectDisplayID,
-    pub zone: Option<SnapZone>,
-}
-
-/// Resource to control whether window reshuffling should be skipped.
-#[derive(Resource)]
-pub struct SkipReshuffle(pub bool);
-
-/// Resource indicating whether Mission Control is currently active.
-#[derive(Resource)]
-pub struct MissionControlActive(pub bool);
-
-/// Resource holding the `WinID` of a window that should gain focus when focus-follows-mouse is enabled.
-#[derive(Resource)]
-pub struct FocusFollowsMouse(pub Option<WinID>);
-
 /// Resource to control whether the application should poll for notifications.
 #[derive(PartialEq, Resource)]
 pub struct PollForNotifications;
-
-#[derive(PartialEq, Resource)]
-pub struct Initializing;
-
-/// Marker resource inserted after initialization completes, triggering startup app launches.
-#[derive(Resource)]
-pub struct StartupPending;
 
 /// Component for a pending startup app launch with a countdown timer.
 #[derive(Component)]
@@ -293,14 +254,15 @@ pub fn setup_bevy_app(
 
     let mut app = BevyApp::new();
     app.add_plugins(MinimalPlugins)
+        .add_plugins(bevy::state::app::StatesPlugin)
         .init_resource::<Messages<Event>>()
         .insert_resource(Time::<Virtual>::from_max_delta(Duration::from_secs(10)))
         .insert_resource(WindowManager(window_manager))
-        .insert_resource(SkipReshuffle(false))
-        .insert_resource(MissionControlActive(false))
-        .insert_resource(FocusFollowsMouse(None))
+        .init_resource::<state::FocusContext>()
+        .init_resource::<state::FullscreenSpace>()
         .insert_resource(PollForNotifications)
-        .insert_resource(Initializing)
+        .init_state::<state::AppPhase>()
+        .init_state::<state::InteractionMode>()
         .insert_resource(crate::plugins::snapshot::SharedState(shared_state.clone()))
         .insert_non_send_resource(watcher)
         .add_plugins((

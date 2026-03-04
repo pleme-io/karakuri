@@ -3,9 +3,11 @@ use std::time::Duration;
 use bevy::app::{App, Plugin, Startup, Update};
 use bevy::ecs::schedule::IntoScheduleConfigs;
 use bevy::ecs::schedule::common_conditions::resource_exists;
+use bevy::state::condition::in_state;
 use bevy::time::common_conditions::on_timer;
 
-use crate::ecs::{Initializing, PollForNotifications, StartupPending, systems, triggers};
+use crate::ecs::state::AppPhase;
+use crate::ecs::{PollForNotifications, systems, triggers};
 
 const DISPLAY_CHANGE_CHECK_FREQ_MS: u64 = 1000;
 
@@ -26,11 +28,11 @@ impl Plugin for AppLifecyclePlugin {
                     systems::finish_setup,
                 )
                     .chain()
-                    .run_if(resource_exists::<Initializing>),
+                    .run_if(in_state(AppPhase::Initializing)),
                 systems::add_launched_process,
                 systems::add_launched_application,
                 systems::spawn_startup_apps
-                    .run_if(resource_exists::<StartupPending>),
+                    .run_if(in_state(AppPhase::StartupPending)),
                 systems::startup_app_ticker,
             ),
         );

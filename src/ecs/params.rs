@@ -9,52 +9,42 @@ use bevy::{
         world::Mut,
     },
     math::IRect,
+    state::state::State,
 };
 use objc2_core_graphics::CGDirectDisplayID;
 use tracing::warn;
 
-use super::{ActiveDisplayMarker, FocusFollowsMouse, MissionControlActive, SkipReshuffle};
+use super::ActiveDisplayMarker;
 use crate::{
     config::{Config, WindowParams},
     ecs::{
-        ActiveWorkspaceMarker, DockPosition, FocusedMarker, FullWidthMarker, Initializing,
-        TrackpadSwipe, Unmanaged,
+        ActiveWorkspaceMarker, DockPosition, FocusedMarker, FullWidthMarker, Unmanaged,
+        state::{AppPhase, FocusContext, FocusSource, InteractionMode, SwipeContext},
     },
     manager::{Application, Display, LayoutStrip, Window},
     platform::{ProcessSerialNumber, WinID},
 };
 
-/// A Bevy `SystemParam` that provides access to the application's configuration and related state.
-/// It allows systems to query various configuration options and modify flags like `FocusFollowsMouse` or `SkipReshuffle`.
+/// A Bevy `SystemParam` that provides read-only access to the application's configuration and focus state.
+/// Use this in systems that do not mutate `FocusContext` — it takes a shared `Res` lock,
+/// allowing Bevy to schedule these systems in parallel with other readers.
 #[derive(SystemParam)]
 pub struct Configuration<'w> {
-    /// The main application `Config` resource.
     config: Res<'w, Config>,
-    /// Resource to manage the window ID for focus-follows-mouse behavior.
-    focus_follows_mouse_id: ResMut<'w, FocusFollowsMouse>,
-    /// Resource to determine if window reshuffling should be skipped.
-    skip_reshuffle: ResMut<'w, SkipReshuffle>,
-    /// Resource indicating whether Mission Control is currently active.
-    mission_control_active: Res<'w, MissionControlActive>,
-
-    initializing: Option<Res<'w, Initializing>>,
+    focus_ctx: Res<'w, FocusContext>,
+    interaction_mode: Res<'w, State<InteractionMode>>,
+    app_phase: Res<'w, State<AppPhase>>,
 }
 
 impl Configuration<'_> {
-    /// Returns `true` if focus should follow the mouse based on the current configuration.
-    /// If the configuration option is not set, it defaults to `true`.
     pub fn focus_follows_mouse(&self) -> bool {
-        // Default is enabled.
         self.config
             .options()
             .focus_follows_mouse
             .is_none_or(|ffm| ffm)
     }
 
-    /// Returns `true` if the mouse cursor should follow the focused window based on the current configuration.
-    /// If the configuration option is not set, it defaults to `true`.
     pub fn mouse_follows_focus(&self) -> bool {
-        // Default is enabled.
         self.config
             .options()
             .mouse_follows_focus
@@ -62,94 +52,123 @@ impl Configuration<'_> {
     }
 
     pub fn auto_center(&self) -> bool {
-        // Default is enabled.
         self.config
             .options()
             .auto_center
             .is_some_and(|centered| centered)
     }
 
-    /// Returns the configured number of fingers for swipe gestures.
-    ///
-    /// # Returns
-    ///
-    /// An `Option<usize>` containing the number of fingers, or `None` if not configured.
     pub fn swipe_gesture_fingers(&self) -> Option<usize> {
         self.config.options().swipe_gesture_fingers
     }
 
-    /// Finds window properties for a given `title` and `bundle_id` based on the application configuration.
-    ///
-    /// # Arguments
-    ///
-    /// * `title` - The title of the window to match.
-    /// * `bundle_id` - The bundle identifier of the application owning the window.
-    ///
-    /// # Returns
-    ///
-    /// `Some(WindowParams)` if matching window properties are found, otherwise `None`.
     pub fn find_window_properties(&self, title: &str, bundle_id: &str) -> Vec<WindowParams> {
         self.config.find_window_properties(title, bundle_id)
     }
 
-    /// Returns the `WinID` of the window currently marked for focus-follows-mouse.
-    ///
-    /// # Returns
-    ///
-    /// An `Option<WinID>` if a window is marked, otherwise `None`.
     pub fn ffm_flag(&self) -> Option<WinID> {
-        self.focus_follows_mouse_id.0
+        self.focus_ctx.ffm_window
     }
 
-    /// Sets the `WinID` for the focus-follows-mouse flag.
-    ///
-    /// # Arguments
-    ///
-    /// * `flag` - An `Option<WinID>` to set as the focus-follows-mouse target.
-    pub fn set_ffm_flag(&mut self, flag: Option<WinID>) {
-        self.focus_follows_mouse_id.as_mut().0 = flag;
-    }
-
-    /// Sets the `skip_reshuffle` flag.
-    /// When `true`, window reshuffling logic will be temporarily bypassed.
-    ///
-    /// # Arguments
-    ///
-    /// * `to` - A boolean value to set the `skip_reshuffle` flag to.
-    pub fn set_skip_reshuffle(&mut self, to: bool) {
-        self.skip_reshuffle.as_mut().0 = to;
-    }
-
-    /// Returns `true` if window reshuffling should be skipped.
-    ///
-    /// # Returns
-    ///
-    /// `true` if reshuffling is skipped, `false` otherwise.
     pub fn skip_reshuffle(&self) -> bool {
-        self.skip_reshuffle.0
+        self.focus_ctx.skip_reshuffle()
     }
 
     pub fn edge_padding(&self) -> (i32, i32, i32, i32) {
         self.config.edge_padding()
     }
 
-    /// Returns `true` if Mission Control is currently active.
-    ///
-    /// # Returns
-    ///
-    /// `true` if Mission Control is active, `false` otherwise.
     pub fn mission_control_active(&self) -> bool {
-        self.mission_control_active.0
+        *self.interaction_mode.get() == InteractionMode::MissionControl
     }
 
-    /// Returns `true` when mouse is fully disconnected from tiling.
-    /// Both `focus_follows_mouse` and `mouse_follows_focus` must be disabled.
     pub fn mouse_disconnected(&self) -> bool {
         !self.focus_follows_mouse() && !self.mouse_follows_focus()
     }
 
     pub fn initializing(&self) -> bool {
-        self.initializing.is_some()
+        *self.app_phase.get() == AppPhase::Initializing
+    }
+
+    pub fn config(&self) -> &Config {
+        &self.config
+    }
+}
+
+/// A Bevy `SystemParam` that provides mutable access to the application's configuration and focus state.
+/// Use this in systems that need to call `set_ffm_flag` or `set_skip_reshuffle`.
+#[derive(SystemParam)]
+pub struct ConfigurationMut<'w> {
+    config: Res<'w, Config>,
+    focus_ctx: ResMut<'w, FocusContext>,
+    interaction_mode: Res<'w, State<InteractionMode>>,
+    app_phase: Res<'w, State<AppPhase>>,
+}
+
+impl ConfigurationMut<'_> {
+    pub fn focus_follows_mouse(&self) -> bool {
+        self.config
+            .options()
+            .focus_follows_mouse
+            .is_none_or(|ffm| ffm)
+    }
+
+    pub fn mouse_follows_focus(&self) -> bool {
+        self.config
+            .options()
+            .mouse_follows_focus
+            .is_none_or(|mff| mff)
+    }
+
+    pub fn auto_center(&self) -> bool {
+        self.config
+            .options()
+            .auto_center
+            .is_some_and(|centered| centered)
+    }
+
+    pub fn swipe_gesture_fingers(&self) -> Option<usize> {
+        self.config.options().swipe_gesture_fingers
+    }
+
+    pub fn find_window_properties(&self, title: &str, bundle_id: &str) -> Vec<WindowParams> {
+        self.config.find_window_properties(title, bundle_id)
+    }
+
+    pub fn ffm_flag(&self) -> Option<WinID> {
+        self.focus_ctx.ffm_window
+    }
+
+    pub fn set_ffm_flag(&mut self, flag: Option<WinID>) {
+        self.focus_ctx.ffm_window = flag;
+    }
+
+    pub fn set_skip_reshuffle(&mut self, to: bool) {
+        self.focus_ctx.source = if to {
+            FocusSource::Mouse
+        } else {
+            FocusSource::Keyboard
+        };
+    }
+
+    pub fn skip_reshuffle(&self) -> bool {
+        self.focus_ctx.skip_reshuffle()
+    }
+
+    pub fn edge_padding(&self) -> (i32, i32, i32, i32) {
+        self.config.edge_padding()
+    }
+
+    pub fn mission_control_active(&self) -> bool {
+        *self.interaction_mode.get() == InteractionMode::MissionControl
+    }
+
+    pub fn mouse_disconnected(&self) -> bool {
+        !self.focus_follows_mouse() && !self.mouse_follows_focus()
+    }
+
+    pub fn initializing(&self) -> bool {
+        *self.app_phase.get() == AppPhase::Initializing
     }
 
     pub fn config(&self) -> &Config {
@@ -320,7 +339,7 @@ impl Windows<'_, '_> {
 
 #[derive(SystemParam)]
 pub struct SmoothSwipeTracking<'w> {
-    tracker: Option<ResMut<'w, TrackpadSwipe>>,
+    tracker: Option<ResMut<'w, SwipeContext>>,
 }
 
 impl SmoothSwipeTracking<'_> {
@@ -349,10 +368,6 @@ impl SmoothSwipeTracking<'_> {
     }
 
     pub fn refresh(velocity: f64, viewport_offset: i32, commands: &mut Commands) {
-        commands.insert_resource(TrackpadSwipe {
-            last_swipe: std::time::Instant::now(),
-            velocity,
-            viewport_offset,
-        });
+        commands.insert_resource(SwipeContext::new(velocity, viewport_offset));
     }
 }

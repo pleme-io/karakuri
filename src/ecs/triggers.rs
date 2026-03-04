@@ -10,24 +10,25 @@ use notify::event::{DataChange, MetadataKind, ModifyKind};
 use notify::{EventKind, Watcher};
 use objc2_app_kit::NSScreen;
 use objc2_foundation::{NSNumber, NSString, ns_string};
+use std::collections::HashMap;
 use std::pin::Pin;
-use std::sync::atomic::Ordering;
 use std::time::Duration;
 use tracing::{Level, debug, error, info, instrument, trace, warn};
 
 use super::{
-    ActiveDisplayMarker, BProcess, EdgeSnapState, FocusedMarker, FreshMarker,
-    MissionControlActive, NativeFullscreenMarker, SnapZone, SpawnWindowTrigger, StrayFocusEvent,
+    ActiveDisplayMarker, BProcess, FocusedMarker, FreshMarker,
+    NativeFullscreenMarker, SnapZone, SpawnWindowTrigger, StrayFocusEvent,
     Timeout, Unmanaged, WMEventTrigger, WindowDraggedMarker,
 };
-use crate::commands::ON_FULLSCREEN_SPACE;
+use crate::ecs::state::{FullscreenSpace, ReloadGuard};
 use crate::config::{Config, EdgeSnapConfig, WindowParams};
 use crate::ecs::params::{
-    ActiveDisplay, ActiveDisplayMut, Configuration, SmoothSwipeTracking, Windows,
+    ActiveDisplay, ActiveDisplayMut, Configuration, ConfigurationMut, SmoothSwipeTracking, Windows,
 };
 use crate::ecs::{
-    ActiveWorkspaceMarker, LocateDockTrigger, SendMessageTrigger, TrackpadSwipe, WindowSwipeMarker,
+    ActiveWorkspaceMarker, LocateDockTrigger, SendMessageTrigger, WindowSwipeMarker,
     reposition_entity, reshuffle_around, resize_entity,
+    state::{DragContext, InteractionMode, SwipeContext},
 };
 use crate::errors::Result;
 use crate::events::Event;
@@ -57,7 +58,7 @@ pub(crate) fn mouse_moved_trigger(
     windows: Windows,
     apps: Query<&Application>,
     window_manager: Res<WindowManager>,
-    mut config: Configuration,
+    mut config: ConfigurationMut,
 ) {
     let Event::MouseMoved { point } = trigger.event().0 else {
         return;
@@ -141,7 +142,8 @@ pub(crate) fn mouse_down_trigger(
     windows: Windows,
     active_display: ActiveDisplay,
     window_manager: Res<WindowManager>,
-    mut config: Configuration,
+    mut config: ConfigurationMut,
+    mut next_mode: ResMut<bevy::state::state::NextState<InteractionMode>>,
     mut commands: Commands,
 ) {
     let Event::MouseDown { point } = trigger.event().0 else {
@@ -162,7 +164,8 @@ pub(crate) fn mouse_down_trigger(
     };
 
     // Stop any ongoing scroll.
-    commands.remove_resource::<TrackpadSwipe>();
+    commands.remove_resource::<SwipeContext>();
+    next_mode.set(InteractionMode::Idle);
 
     // When mouse is fully disconnected from tiling, suppress the reshuffle
     // that would otherwise be triggered by the macOS-native WindowFocused event
@@ -266,7 +269,7 @@ fn windows_not_in_strip<F: Fn(WinID) -> Option<Entity>>(
         })
 }
 
-#[allow(clippy::needless_pass_by_value)]
+#[allow(clippy::needless_pass_by_value, clippy::too_many_arguments)]
 pub(crate) fn workspace_change_trigger(
     trigger: On<WMEventTrigger>,
     active_display: Single<&Display, With<ActiveDisplayMarker>>,
@@ -274,11 +277,24 @@ pub(crate) fn workspace_change_trigger(
     windows: Windows,
     fs_query: Query<&NativeFullscreenMarker>,
     window_manager: Res<WindowManager>,
+    mut fs_space: ResMut<FullscreenSpace>,
+    reload_guard: Option<ResMut<ReloadGuard>>,
     mut commands: Commands,
 ) {
     let Event::SpaceChanged = trigger.event().0 else {
         return;
     };
+
+    // Insert or bump the reload guard to debounce cascading reshuffles.
+    if let Some(mut guard) = reload_guard {
+        guard.bump();
+    } else {
+        let pre_positions: HashMap<Entity, IRect> = windows
+            .iter()
+            .map(|(w, e)| (e, w.frame()))
+            .collect();
+        commands.insert_resource(ReloadGuard::new(pre_positions));
+    }
 
     let Ok(workspace_id) = window_manager.active_display_space(active_display.id()) else {
         error!("Unable to get active workspace id!");
@@ -286,7 +302,7 @@ pub(crate) fn workspace_change_trigger(
     };
 
     let fullscreen = window_manager.is_fullscreen_space(active_display.id());
-    let was_fullscreen = ON_FULLSCREEN_SPACE.swap(fullscreen, Ordering::Relaxed);
+    let was_fullscreen = std::mem::replace(&mut fs_space.0, fullscreen);
     debug!("workspace_change: space={workspace_id} fullscreen={fullscreen}");
 
     // Entering fullscreen → remove the focused window from the strip so there
@@ -358,7 +374,7 @@ pub(crate) fn workspace_change_trigger(
     // commands.spawn((SpaceRecentlyChanged, timeout));
 }
 
-#[allow(clippy::needless_pass_by_value, clippy::type_complexity)]
+#[allow(clippy::needless_pass_by_value, clippy::type_complexity, clippy::too_many_arguments)]
 pub(crate) fn active_workspace_trigger(
     trigger: On<Add, ActiveWorkspaceMarker>,
     windows: Windows,
@@ -366,8 +382,18 @@ pub(crate) fn active_workspace_trigger(
     apps: Query<&mut Application>,
     window_manager: Res<WindowManager>,
     config: Res<Config>,
+    reload_guard: Option<ResMut<ReloadGuard>>,
     mut commands: Commands,
 ) {
+    // If a reload guard is active, bump the settle counter and skip
+    // the redundant reshuffle — the consolidated pass will handle it.
+    let guard_active = if let Some(mut guard) = reload_guard {
+        guard.bump();
+        true
+    } else {
+        false
+    };
+
     let Ok(active_strip) = workspaces.get(trigger.entity) else {
         return;
     };
@@ -414,6 +440,7 @@ pub(crate) fn active_workspace_trigger(
             }
         });
 
+        // Strip membership changed — still need reshuffle even during reload.
         reshuffle_around(entity, &mut commands);
     }
 
@@ -422,7 +449,8 @@ pub(crate) fn active_workspace_trigger(
     // (e.g. native fullscreen) where they may have been positioned with
     // stale data. In floating mode, skip this — windows should stay where
     // the user placed them (prevents three-finger swipe from re-snapping).
-    if !had_moved_windows && !config.is_floating_mode() {
+    // Skip when reload guard is active — the consolidated reshuffle handles it.
+    if !guard_active && !had_moved_windows && !config.is_floating_mode() {
         let focused_entity = windows.focused().map(|(_, entity)| entity).filter(|e| {
             workspaces
                 .get(trigger.entity)
@@ -505,7 +533,7 @@ pub(crate) fn front_switched_trigger(
     windows: Windows,
     processes: Query<(&BProcess, &Children)>,
     applications: Query<&Application>,
-    mut config: Configuration,
+    mut config: ConfigurationMut,
     mut commands: Commands,
 ) {
     let Event::ApplicationFrontSwitched { ref psn } = trigger.event().0 else {
@@ -591,7 +619,7 @@ pub(crate) fn window_focused_trigger(
     applications: Query<&Application>,
     windows: Windows,
     active_display: ActiveDisplay,
-    mut config: Configuration,
+    mut config: ConfigurationMut,
     mut commands: Commands,
 ) {
     const STRAY_FOCUS_RETRY_SEC: u64 = 2;
@@ -696,27 +724,22 @@ pub(crate) fn swipe_gesture_trigger(
     commands.entity(entity).try_insert(WindowSwipeMarker(delta));
 }
 
-/// Handles Mission Control events, updating the `MissionControlActive` resource.
-///
-/// # Arguments
-///
-/// * `trigger` - The Bevy event trigger containing the Mission Control event.
-/// * `mission_control_active` - The `MissionControlActive` resource.
+/// Handles Mission Control events, transitioning `InteractionMode` state.
 #[allow(clippy::needless_pass_by_value)]
 pub(crate) fn mission_control_trigger(
     trigger: On<WMEventTrigger>,
-    mut mission_control_active: ResMut<MissionControlActive>,
+    mut next_mode: ResMut<bevy::state::state::NextState<InteractionMode>>,
     mut commands: Commands,
 ) {
     match trigger.event().0 {
         Event::MissionControlShowAllWindows
         | Event::MissionControlShowFrontWindows
         | Event::MissionControlShowDesktop => {
-            mission_control_active.as_mut().0 = true;
-            commands.remove_resource::<TrackpadSwipe>();
+            next_mode.set(InteractionMode::MissionControl);
+            commands.remove_resource::<SwipeContext>();
         }
         Event::MissionControlExit => {
-            mission_control_active.as_mut().0 = false;
+            next_mode.set(InteractionMode::Idle);
         }
         _ => (),
     }
@@ -837,7 +860,7 @@ pub(crate) fn window_unmanaged_trigger(
     windows: Windows,
     apps: Query<(Entity, &Application)>,
     mut active_display: ActiveDisplayMut,
-    mut config: Configuration,
+    mut config: ConfigurationMut,
     mut commands: Commands,
 ) {
     const UNMANAGED_MAX_SCREEN_RATIO_NUM: i32 = 4;
@@ -989,7 +1012,7 @@ pub(crate) fn window_destroyed_trigger(
     windows: Windows,
     active_display: ActiveDisplay,
     mut apps: Query<&mut Application>,
-    mut config: Configuration,
+    mut config: ConfigurationMut,
     mut commands: Commands,
 ) {
     let Event::WindowDestroyed { window_id } = trigger.event().0 else {
@@ -1028,7 +1051,7 @@ fn give_away_focus(
     entity: Entity,
     windows: &Windows,
     active_strip: &LayoutStrip,
-    config: &mut Configuration,
+    config: &mut ConfigurationMut,
     commands: &mut Commands,
 ) {
     // Move focus to a left neighbour if the panel has more windows.
@@ -1079,7 +1102,7 @@ pub(crate) fn spawn_window_trigger(
     windows: Windows,
     mut apps: Query<(Entity, &mut Application)>,
     mut active_display: ActiveDisplayMut,
-    mut config: Configuration,
+    mut config: ConfigurationMut,
     mut commands: Commands,
 ) {
     let new_windows = &mut trigger.event_mut().0;
@@ -1215,7 +1238,7 @@ fn apply_window_properties(
     active_display: &mut ActiveDisplayMut,
     windows: &Windows,
     apps: &mut Query<(Entity, &mut Application)>,
-    config: &mut Configuration,
+    config: &mut ConfigurationMut,
     commands: &mut Commands,
 ) {
     let floating = properties
@@ -1282,8 +1305,11 @@ fn apply_window_properties(
 pub(crate) fn refresh_configuration_trigger(
     trigger: On<WMEventTrigger>,
     window_manager: Res<WindowManager>,
+    windows: Windows,
     mut config: ResMut<Config>,
     watcher: Option<NonSendMut<Box<dyn Watcher>>>,
+    reload_guard: Option<ResMut<ReloadGuard>>,
+    mut commands: Commands,
 ) {
     let Event::ConfigRefresh(event) = &trigger.event().0 else {
         return;
@@ -1309,6 +1335,7 @@ pub(crate) fn refresh_configuration_trigger(
         _ => return,
     }
 
+    let mut reloaded = false;
     for path in &event.paths {
         if let Some(symlink) = symlink_target(path) {
             debug!(
@@ -1329,6 +1356,24 @@ pub(crate) fn refresh_configuration_trigger(
             error!("loading config '{}': {err}", path.display());
         }).is_ok() {
             crate::platform::gestures::apply_gesture_preferences(&config.options().gesture_suppress);
+            reloaded = true;
+        }
+    }
+
+    // After a successful config reload, insert a reload guard and trigger
+    // a reshuffle so windows snap to the new layout.
+    if reloaded {
+        if let Some(mut guard) = reload_guard {
+            guard.bump();
+        } else {
+            let pre_positions: HashMap<Entity, IRect> = windows
+                .iter()
+                .map(|(w, e)| (e, w.frame()))
+                .collect();
+            commands.insert_resource(ReloadGuard::new(pre_positions));
+        }
+        if let Some((_, entity)) = windows.focused() {
+            reshuffle_around(entity, &mut commands);
         }
     }
 }
@@ -1482,7 +1527,7 @@ pub(crate) fn snap_frame(zone: SnapZone, bounds: &IRect, pad: (i32, i32, i32, i3
     }
 }
 
-/// Tracks the cursor during a drag and updates `EdgeSnapState` with the
+/// Tracks the cursor during a drag and updates `DragContext` with the
 /// current snap zone. Only active in floating mode with at least one snap
 /// zone enabled.
 #[allow(clippy::needless_pass_by_value)]
@@ -1491,7 +1536,8 @@ pub(crate) fn edge_snap_drag_trigger(
     drag_marker: Query<&WindowDraggedMarker>,
     displays: Query<&Display>,
     config: Res<Config>,
-    snap_state: Option<Res<EdgeSnapState>>,
+    drag_ctx: Option<Res<DragContext>>,
+    mut next_mode: ResMut<bevy::state::state::NextState<InteractionMode>>,
     mut commands: Commands,
 ) {
     let Event::MouseDragged { point } = trigger.event().0 else {
@@ -1530,42 +1576,46 @@ pub(crate) fn edge_snap_drag_trigger(
     let zone = detect_snap_zone(px, py, &bounds, threshold, &snap_cfg);
 
     // Only insert/update when the state actually changes.
-    let needs_update = snap_state
+    let needs_update = drag_ctx
         .as_ref()
-        .is_none_or(|s| s.entity != entity || s.zone != zone);
+        .is_none_or(|s| s.entity != entity || s.snap_zone != zone);
 
     if needs_update {
-        commands.insert_resource(EdgeSnapState {
+        commands.insert_resource(DragContext {
             entity,
             display_id: display.id(),
-            zone,
+            snap_zone: zone,
+            snap_display: Some(display.id()),
         });
+        next_mode.set(InteractionMode::Dragging);
     }
 }
 
-/// On mouse-up, if an `EdgeSnapState` with a zone is present, snap the
-/// window to that zone and remove the state.
+/// On mouse-up, if a `DragContext` with a snap zone is present, snap the
+/// window to that zone and remove the context.
 #[allow(clippy::needless_pass_by_value)]
 pub(crate) fn edge_snap_release_trigger(
     trigger: On<WMEventTrigger>,
-    snap_state: Option<Res<EdgeSnapState>>,
+    drag_ctx: Option<Res<DragContext>>,
     displays: Query<&Display>,
     config: Res<Config>,
+    mut next_mode: ResMut<bevy::state::state::NextState<InteractionMode>>,
     mut commands: Commands,
 ) {
     let Event::MouseUp { .. } = trigger.event().0 else {
         return;
     };
-    let Some(state) = snap_state else {
+    let Some(ctx) = drag_ctx else {
         return;
     };
 
-    let entity = state.entity;
-    let display_id = state.display_id;
-    let zone = state.zone;
+    let entity = ctx.entity;
+    let display_id = ctx.display_id;
+    let zone = ctx.snap_zone;
 
     // Always clean up the resource.
-    commands.remove_resource::<EdgeSnapState>();
+    commands.remove_resource::<DragContext>();
+    next_mode.set(InteractionMode::Idle);
 
     let Some(zone) = zone else {
         return;
