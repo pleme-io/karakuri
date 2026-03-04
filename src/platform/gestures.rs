@@ -1,6 +1,6 @@
 use std::process::Command;
 
-use tracing::{debug, error};
+use tracing::{debug, error, info};
 
 use crate::config::GestureSuppress;
 
@@ -12,73 +12,59 @@ use crate::config::GestureSuppress;
 ///
 /// Called on startup and on config hot-reload.
 pub fn apply_gesture_preferences(gestures: &GestureSuppress) {
-    // 4-finger horizontal swipe (Mission Control space switching)
-    //   Domain: com.apple.AppleMultitouchTrackpad
-    //   Key:    TrackpadFourFingerHorizSwipeGesture
-    //   Values: 0 = off, 2 = switch spaces
+    let mut dock_changed = false;
+
+    // 4-finger gestures: horizontal swipe, vertical swipe, pinch
     if let Some(suppress) = gestures.four_finger {
         let value = if suppress { "0" } else { "2" };
-        defaults_write_int(
-            "com.apple.AppleMultitouchTrackpad",
-            "TrackpadFourFingerHorizSwipeGesture",
-            value,
-        );
-        // Also set the Bluetooth trackpad domain for external trackpads
-        defaults_write_int(
-            "com.apple.driver.AppleBluetoothMultitouch.trackpad",
-            "TrackpadFourFingerHorizSwipeGesture",
-            value,
-        );
 
-        // 4-finger vertical swipe (Mission Control / App Exposé)
-        //   Key: TrackpadFourFingerVertSwipeGesture
-        //   Values: 0 = off, 2 = on
-        let vert_value = if suppress { "0" } else { "2" };
-        defaults_write_int(
-            "com.apple.AppleMultitouchTrackpad",
-            "TrackpadFourFingerVertSwipeGesture",
-            vert_value,
-        );
-        defaults_write_int(
-            "com.apple.driver.AppleBluetoothMultitouch.trackpad",
-            "TrackpadFourFingerVertSwipeGesture",
-            vert_value,
-        );
+        for domain in TRACKPAD_DOMAINS {
+            defaults_write_int(domain, "TrackpadFourFingerHorizSwipeGesture", value);
+            defaults_write_int(domain, "TrackpadFourFingerVertSwipeGesture", value);
+            defaults_write_int(domain, "TrackpadFourFingerPinchGesture", value);
+        }
 
-        // 4-finger pinch (Launchpad via 4 fingers)
-        //   Key: TrackpadFourFingerPinchGesture
-        //   Values: 0 = off, 2 = on
-        let pinch_value = if suppress { "0" } else { "2" };
-        defaults_write_int(
-            "com.apple.AppleMultitouchTrackpad",
-            "TrackpadFourFingerPinchGesture",
-            pinch_value,
-        );
-        defaults_write_int(
-            "com.apple.driver.AppleBluetoothMultitouch.trackpad",
-            "TrackpadFourFingerPinchGesture",
-            pinch_value,
-        );
+        // When suppressing 4-finger, ensure 3-finger drag is OFF so that
+        // 3-finger horizontal swipe can switch spaces instead of dragging windows.
+        if suppress {
+            for domain in TRACKPAD_DOMAINS {
+                defaults_write_int(domain, "TrackpadThreeFingerDrag", "0");
+                // Ensure 3-finger swipe is set to switch spaces (2)
+                defaults_write_int(domain, "TrackpadThreeFingerHorizSwipeGesture", "2");
+            }
+        }
     }
 
-    // 5-finger pinch (Launchpad)
-    //   Domain: com.apple.dock
-    //   Key:    showLaunchpadGestureEnabled
-    //   Values: -bool true/false
+    // 5-finger pinch (Launchpad) — must set BOTH trackpad and Dock domains
     if let Some(suppress) = gestures.five_finger_pinch {
-        let value = if suppress { "false" } else { "true" };
-        defaults_write_bool("com.apple.dock", "showLaunchpadGestureEnabled", value);
+        let trackpad_value = if suppress { "0" } else { "2" };
+        let dock_value = if suppress { "false" } else { "true" };
+
+        for domain in TRACKPAD_DOMAINS {
+            defaults_write_int(domain, "TrackpadFiveFingerPinchGesture", trackpad_value);
+        }
+        defaults_write_bool("com.apple.dock", "showLaunchpadGestureEnabled", dock_value);
+        dock_changed = true;
     }
 
-    // 5-finger spread (Show Desktop)
-    //   Domain: com.apple.dock
-    //   Key:    showDesktopGestureEnabled
-    //   Values: -bool true/false
+    // 5-finger spread (Show Desktop) — Dock domain
     if let Some(suppress) = gestures.five_finger_spread {
-        let value = if suppress { "false" } else { "true" };
-        defaults_write_bool("com.apple.dock", "showDesktopGestureEnabled", value);
+        let dock_value = if suppress { "false" } else { "true" };
+        defaults_write_bool("com.apple.dock", "showDesktopGestureEnabled", dock_value);
+        dock_changed = true;
+    }
+
+    // Restart Dock so it picks up the new preferences immediately
+    if dock_changed {
+        info!("restarting Dock to apply gesture preferences");
+        let _ = Command::new("killall").arg("Dock").output();
     }
 }
+
+const TRACKPAD_DOMAINS: &[&str] = &[
+    "com.apple.AppleMultitouchTrackpad",
+    "com.apple.driver.AppleBluetoothMultitouch.trackpad",
+];
 
 fn defaults_write_int(domain: &str, key: &str, value: &str) {
     debug!("defaults write {domain} {key} -int {value}");
