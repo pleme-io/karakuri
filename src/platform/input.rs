@@ -266,9 +266,9 @@ impl InputHandler {
         false
     }
 
-    /// Returns true if this is a 5-finger gesture that should be suppressed.
+    /// Returns true if this gesture should be suppressed based on finger count.
     fn should_suppress_gesture(&self, event: &CGEvent) -> bool {
-        if !self.config.suppress_five_finger_gestures() {
+        if !self.config.suppress_gestures() {
             return false;
         }
         let Some(ns_event) = NSEvent::eventWithCGEvent(event) else {
@@ -277,7 +277,16 @@ impl InputHandler {
         if ns_event.r#type() != NSEventType::Gesture {
             return false;
         }
-        ns_event.allTouches().len() == 5
+        let finger_count = ns_event.allTouches().len();
+        let opts = self.config.options();
+        match finger_count {
+            4 => opts.gesture_suppress.four_finger.unwrap_or(false),
+            5 => {
+                opts.gesture_suppress.five_finger_pinch.unwrap_or(false)
+                    || opts.gesture_suppress.five_finger_spread.unwrap_or(false)
+            }
+            _ => false,
+        }
     }
 
     /// Handles swipe gesture events.

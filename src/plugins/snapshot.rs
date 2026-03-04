@@ -149,6 +149,7 @@ fn sync_snapshot(
             edge_snap_right: options.edge_snap.right.unwrap_or(false),
             edge_snap_preview: options.edge_snap.preview.unwrap_or(true),
             edge_snap_sticky_dwell_ms: options.edge_snap.sticky_dwell_ms.unwrap_or(300),
+            suppress_four_finger: options.gesture_suppress.four_finger.unwrap_or(false),
             suppress_five_finger_pinch: options.gesture_suppress.five_finger_pinch.unwrap_or(false),
             suppress_five_finger_spread: options.gesture_suppress.five_finger_spread.unwrap_or(false),
         },

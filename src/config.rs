@@ -438,10 +438,16 @@ impl Config {
         std::time::Duration::from_millis(self.options().edge_snap.sticky_dwell_ms.unwrap_or(300))
     }
 
-    /// Returns true if any 5-finger gesture suppression is enabled.
-    pub fn suppress_five_finger_gestures(&self) -> bool {
+    /// Returns true if any gesture suppression is enabled.
+    pub fn suppress_gestures(&self) -> bool {
         let g = &self.options().gesture_suppress;
-        g.five_finger_pinch.unwrap_or(false) || g.five_finger_spread.unwrap_or(false)
+        g.four_finger.unwrap_or(false)
+            || g.five_finger_pinch.unwrap_or(false)
+            || g.five_finger_spread.unwrap_or(false)
+    }
+
+    pub fn suppress_four_finger_gestures(&self) -> bool {
+        self.options().gesture_suppress.four_finger.unwrap_or(false)
     }
 
     pub fn scripting(&self) -> Option<ScriptingConfig> {
@@ -625,11 +631,13 @@ pub enum SwipeGestureDirection {
     Reversed,
 }
 
-/// Configuration for suppressing 5-finger trackpad gestures.
-/// macOS maps 5-finger pinch to Launchpad and 5-finger spread to Show Desktop.
-/// Enabling either option prevents macOS from acting on those gestures.
+/// Configuration for suppressing trackpad gestures.
+/// Prevents macOS from acting on the specified gestures by swallowing
+/// the events at the CGEventTap level.
 #[derive(Deserialize, Clone, Debug, Default)]
 pub struct GestureSuppress {
+    /// Suppress all 4-finger gestures (Space switching, etc.). Default: false.
+    pub four_finger: Option<bool>,
     /// Suppress 5-finger pinch gesture (Launchpad). Default: false.
     pub five_finger_pinch: Option<bool>,
     /// Suppress 5-finger spread gesture (Show Desktop). Default: false.

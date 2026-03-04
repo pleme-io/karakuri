@@ -65,6 +65,7 @@ pub struct ConfigFlags {
     pub edge_snap_right: bool,
     pub edge_snap_preview: bool,
     pub edge_snap_sticky_dwell_ms: u64,
+    pub suppress_four_finger: bool,
     pub suppress_five_finger_pinch: bool,
     pub suppress_five_finger_spread: bool,
 }
