@@ -12,9 +12,15 @@ let
   cfg = config.blackmatter.components.karakuri;
   isDarwin = pkgs.stdenv.isDarwin;
 
+  # Merge systemDefaults into settings as the `system_defaults` key
+  effectiveSettings =
+    if cfg.settings == null then null
+    else if cfg.systemDefaults == { } then cfg.settings
+    else cfg.settings // { system_defaults = cfg.systemDefaults; };
+
   # Generate YAML config from nix attrs (following kindling pattern)
   yamlConfig = pkgs.writeText "karakuri.yaml"
-    (lib.generators.toYAML { } cfg.settings);
+    (lib.generators.toYAML { } effectiveSettings);
 
   logDir =
     if isDarwin then "${config.home.homeDirectory}/Library/Logs" else "${config.home.homeDirectory}/.local/share/karakuri/logs";
@@ -69,6 +75,22 @@ in
           init_script = "~/.config/karakuri/init.rhai";
           script_dirs = [ "~/.config/karakuri/scripts" ];
           hot_reload = true;
+        };
+      };
+    };
+
+    systemDefaults = mkOption {
+      type = types.attrsOf (types.attrsOf types.anything);
+      default = { };
+      description = ''
+        macOS defaults applied by karakuri at startup and hot-reload.
+        Outer key = domain (e.g. "com.apple.dock"), inner key = preference key.
+        Merged into `system_defaults` in the generated YAML config.
+      '';
+      example = {
+        "com.apple.dock" = {
+          autohide = true;
+          autohide-delay = 0.0;
         };
       };
     };

@@ -1352,10 +1352,11 @@ pub(crate) fn refresh_configuration_trigger(
             }
         }
         info!("Reloading configuration file; {}", path.display());
+        let old_defaults = config.merged_system_defaults();
         if config.reload_config(path.as_path()).inspect_err(|err| {
             error!("loading config '{}': {err}", path.display());
         }).is_ok() {
-            crate::platform::gestures::apply_gesture_preferences(&config.options().gesture_suppress);
+            crate::platform::defaults::diff_and_apply(&old_defaults, &config.merged_system_defaults());
             reloaded = true;
         }
     }

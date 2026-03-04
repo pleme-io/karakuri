@@ -6,7 +6,7 @@ use figment::{
 };
 use objc2_core_foundation::{CFData, CFString};
 use regex::Regex;
-use serde::{Deserialize, Deserializer, de};
+use serde::{Deserialize, Deserializer, Serialize, de};
 use std::{
     collections::HashMap,
     env,
@@ -457,6 +457,80 @@ impl Config {
     pub fn startup_apps(&self) -> Vec<StartupApp> {
         self.options().startup
     }
+
+    /// Returns a merged map of all defaults to apply: explicit `system_defaults`
+    /// entries combined with entries derived from `gesture_suppress`.
+    pub fn merged_system_defaults(&self) -> HashMap<String, HashMap<String, DefaultsValue>> {
+        let mut merged: HashMap<String, HashMap<String, DefaultsValue>> = self
+            .inner()
+            .system_defaults
+            .clone()
+            .unwrap_or_default();
+
+        // Merge gesture_suppress entries into the map
+        Self::merge_gesture_defaults(&self.options().gesture_suppress, &mut merged);
+        merged
+    }
+
+    /// Converts `gesture_suppress` fields into concrete `system_defaults` entries
+    /// for the trackpad and dock domains.
+    fn merge_gesture_defaults(
+        gestures: &GestureSuppress,
+        map: &mut HashMap<String, HashMap<String, DefaultsValue>>,
+    ) {
+        const TRACKPAD_DOMAINS: &[&str] = &[
+            "com.apple.AppleMultitouchTrackpad",
+            "com.apple.driver.AppleBluetoothMultitouch.trackpad",
+        ];
+
+        if let Some(suppress) = gestures.four_finger {
+            let value = if suppress { 0 } else { 2 };
+            for domain in TRACKPAD_DOMAINS {
+                let entry = map.entry((*domain).to_string()).or_default();
+                entry
+                    .entry("TrackpadFourFingerHorizSwipeGesture".into())
+                    .or_insert(DefaultsValue::Int(value));
+                entry
+                    .entry("TrackpadFourFingerVertSwipeGesture".into())
+                    .or_insert(DefaultsValue::Int(value));
+                entry
+                    .entry("TrackpadFourFingerPinchGesture".into())
+                    .or_insert(DefaultsValue::Int(value));
+            }
+            if suppress {
+                for domain in TRACKPAD_DOMAINS {
+                    let entry = map.entry((*domain).to_string()).or_default();
+                    entry
+                        .entry("TrackpadThreeFingerDrag".into())
+                        .or_insert(DefaultsValue::Int(0));
+                    entry
+                        .entry("TrackpadThreeFingerHorizSwipeGesture".into())
+                        .or_insert(DefaultsValue::Int(2));
+                }
+            }
+        }
+
+        if let Some(suppress) = gestures.five_finger_pinch {
+            let trackpad_value = if suppress { 0 } else { 2 };
+            let dock_value = !suppress;
+            for domain in TRACKPAD_DOMAINS {
+                let entry = map.entry((*domain).to_string()).or_default();
+                entry
+                    .entry("TrackpadFiveFingerPinchGesture".into())
+                    .or_insert(DefaultsValue::Int(trackpad_value));
+            }
+            let dock = map.entry("com.apple.dock".into()).or_default();
+            dock.entry("showLaunchpadGestureEnabled".into())
+                .or_insert(DefaultsValue::Bool(dock_value));
+        }
+
+        if let Some(suppress) = gestures.five_finger_spread {
+            let dock_value = !suppress;
+            let dock = map.entry("com.apple.dock".into()).or_default();
+            dock.entry("showDesktopGestureEnabled".into())
+                .or_insert(DefaultsValue::Bool(dock_value));
+        }
+    }
 }
 
 fn parse_hex_color(hex: &str) -> (f64, f64, f64) {
@@ -527,6 +601,22 @@ struct InnerConfig {
     scripting: Option<ScriptingConfig>,
     /// Named shell commands referenced by `exec_<name>` bindings.
     execs: Option<HashMap<String, String>>,
+    /// Arbitrary macOS `defaults write` entries applied at startup and hot-reload.
+    /// Outer key = domain (e.g. "com.apple.dock"), inner key = preference key.
+    system_defaults: Option<HashMap<String, HashMap<String, DefaultsValue>>>,
+}
+
+/// A typed value for the `system_defaults` config section.
+/// Represents any value that can be written via `defaults write`.
+#[derive(Deserialize, Serialize, Clone, Debug, PartialEq)]
+#[serde(untagged)]
+pub enum DefaultsValue {
+    Bool(bool),
+    Int(i64),
+    Float(f64),
+    String(String),
+    Array(Vec<DefaultsValue>),
+    Dict(HashMap<String, DefaultsValue>),
 }
 
 /// Configuration for the Rhai scripting engine.
