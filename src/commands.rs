@@ -52,6 +52,8 @@ pub enum Operation {
     FullWidth,
     /// Moves the focused window to the next available display.
     ToNextDisplay,
+    /// Moves the focused window to the display in the given direction.
+    ToDisplay(Direction),
     /// Distributes heights equally among windows in the focused stack.
     Equalize,
     /// Toggles the managed state of the focused window.
@@ -415,7 +417,7 @@ fn command_swap_focus(
         {
             debug!("swapping window to display in direction {direction:?}");
             commands.trigger(SendMessageTrigger(Event::Command {
-                command: Command::Window(Operation::ToNextDisplay),
+                command: Command::Window(Operation::ToDisplay(direction.clone())),
             }));
         }
     }
@@ -633,15 +635,9 @@ fn manage_window(mut messages: MessageReader<Event>, windows: Windows, mut comma
     reshuffle_around(entity, &mut commands);
 }
 
-/// Moves the focused window to the next available display.
-/// The window will be repositioned to the center of the new display.
-///
-/// # Arguments
-///
-/// * `focused_entity` - The `Entity` of the currently focused window.
-/// * `windows` - A mutable query for `Window` components, their `Entity`, and whether they have the `Unmanaged` marker.
-/// * `active_display` - A mutable reference to the `ActiveDisplayMut` resource.
-/// * `commands` - Bevy commands to modify entities and trigger events.
+/// Moves the focused window to the display in the given direction (or any other display
+/// for the legacy `ToNextDisplay` variant). The window is placed at the entry edge of the
+/// target display so continued navigation in the same direction works naturally.
 #[allow(clippy::needless_pass_by_value)]
 fn to_next_display(
     mut messages: MessageReader<Event>,
@@ -650,12 +646,21 @@ fn to_next_display(
     window_manager: Res<WindowManager>,
     mut commands: Commands,
 ) {
-    if filter_window_operations(&mut messages, |op| matches!(op, Operation::ToNextDisplay))
-        .next()
-        .is_none()
-    {
-        return;
-    }
+    // Accept both ToNextDisplay (legacy) and ToDisplay(direction).
+    let direction = {
+        let mut dir = None;
+        for op in filter_window_operations(&mut messages, |op| {
+            matches!(op, Operation::ToNextDisplay | Operation::ToDisplay(_))
+        }) {
+            dir = match op {
+                Operation::ToDisplay(d) => Some(Some(d.clone())),
+                Operation::ToNextDisplay => Some(None),
+                _ => unreachable!(),
+            };
+        }
+        let Some(direction) = dir else { return };
+        direction
+    };
 
     let Some((window, entity, unmanaged)) = windows
         .focused()
@@ -667,26 +672,46 @@ fn to_next_display(
         return;
     }
 
-    let Some(other) = active_display.other().next() else {
-        debug!("no other display to move window to.");
+    // Find the target display: spatially if we have a direction, otherwise first other.
+    let active_bounds = active_display.bounds();
+    let others: Vec<_> = active_display.other().collect();
+    let target_id = if let Some(ref dir) = direction {
+        find_display_in_direction(dir, active_bounds, others.iter().map(|d| &**d))
+            .map(Display::id)
+    } else {
+        others.first().map(|d| d.id())
+    };
+    let Some(target_id) = target_id else {
+        debug!("no target display found");
+        return;
+    };
+    let Some(other) = others.iter().find(|d| d.id() == target_id) else {
         return;
     };
 
+    // Place the window at the entry edge of the target display.
+    let other_bounds = other.bounds();
+    let win_width = window.frame().size().x;
+    let dest_x = match direction.as_ref() {
+        // Coming from the right (going West) → place at right edge of target
+        Some(Direction::West) => other_bounds.max.x - win_width,
+        // Coming from the left (going East) → place at left edge of target
+        Some(Direction::East) => other_bounds.min.x,
+        // Fallback: center on target display
+        _ => other_bounds.center().x - win_width / 2,
+    };
+    let dest = other_bounds.min.with_x(dest_x);
+
     debug!(
-        "moving window (id {}, {entity}) to display {}: {}.",
+        "moving window (id {}, {entity}) to display {} at x={}",
         window.id(),
         other.id(),
-        other.width() / 2,
+        dest_x,
     );
-    let center = other.bounds().center().x;
-    let dest = other
-        .bounds()
-        .min
-        .with_x(center - window.frame().size().x / 2);
-    reposition_entity(entity, dest, other.id(), &mut commands);
+    reposition_entity(entity, dest, target_id, &mut commands);
     reshuffle_around(entity, &mut commands);
 
-    window_manager.center_mouse(None, &other.bounds());
+    window_manager.center_mouse(None, &other_bounds);
 
     // Trigger DisplayChanged so ActiveDisplayMarker updates immediately
     // instead of waiting for the 1s polling watcher.
@@ -758,19 +783,27 @@ fn mouse_to_next_display(
         return;
     };
 
-    let visible_width = |window: &Window| other.bounds().intersect(window.frame()).width();
-    let Some(window) = other_strip
+    // Pick the edge window that matches the entry direction:
+    // Going West → land on the rightmost window (so continued West keeps going left)
+    // Going East → land on the leftmost window (so continued East keeps going right)
+    // Otherwise  → pick the most visible window as fallback.
+    let all_windows: Vec<_> = other_strip
         .all_windows()
         .iter()
         .filter_map(|entity| windows.get(*entity))
-        .max_by(|left, right| {
-            if visible_width(left) < visible_width(right) {
-                std::cmp::Ordering::Less
-            } else {
-                std::cmp::Ordering::Greater
-            }
-        })
-    else {
+        .collect();
+    let window = match direction {
+        Direction::West => all_windows.iter().max_by_key(|w| w.frame().max.x),
+        Direction::East => all_windows.iter().min_by_key(|w| w.frame().min.x),
+        Direction::North => all_windows.iter().max_by_key(|w| w.frame().max.y),
+        Direction::South => all_windows.iter().min_by_key(|w| w.frame().min.y),
+        _ => {
+            let visible_width =
+                |window: &&Window| other.bounds().intersect(window.frame()).width();
+            all_windows.iter().max_by_key(|w| visible_width(w))
+        }
+    };
+    let Some(window) = window else {
         debug!("no suitable windows on the other display to move the mouse.");
         return;
     };
