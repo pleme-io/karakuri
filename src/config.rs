@@ -150,7 +150,7 @@ fn parse_mouse_move(argv: &[&str]) -> Result<MouseMove> {
     ));
 
     let out = match cmd {
-        "nextdisplay" => MouseMove::ToNextDisplay,
+        "nextdisplay" => MouseMove::ToDisplay(crate::commands::Direction::East),
         _ => {
             return Err(err);
         }

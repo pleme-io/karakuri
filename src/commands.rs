@@ -63,8 +63,8 @@ pub enum Operation {
 /// Defines operations that can be performed on the mouse.
 #[derive(Clone, Debug)]
 pub enum MouseMove {
-    /// Moves the mouse pointer to the next available display.
-    ToNextDisplay,
+    /// Moves the mouse pointer to the display in the given direction.
+    ToDisplay(Direction),
 }
 
 /// Represents a command that can be issued to the window manager.
@@ -79,6 +79,40 @@ pub enum Command {
     PrintState,
     /// Execute an arbitrary shell command (e.g., `open -a Raycast`).
     Exec(String),
+}
+
+/// Find the nearest display in the given direction from `active_bounds`.
+///
+/// For West/East: picks the display whose horizontal edge is closest in that direction.
+/// For North/South: picks the display whose vertical edge is closest in that direction.
+/// Returns `None` if no display exists in that direction.
+fn find_display_in_direction<'a>(
+    direction: &Direction,
+    active_bounds: IRect,
+    others: impl Iterator<Item = &'a Display>,
+) -> Option<&'a Display> {
+    others
+        .filter(|d| {
+            let b = d.bounds();
+            match direction {
+                Direction::West => b.min.x < active_bounds.min.x,
+                Direction::East => b.min.x >= active_bounds.max.x,
+                Direction::North => b.min.y < active_bounds.min.y,
+                Direction::South => b.min.y >= active_bounds.max.y,
+                Direction::First | Direction::Last => false,
+            }
+        })
+        .min_by_key(|d| {
+            let b = d.bounds();
+            match direction {
+                // Nearest to the left / right / above / below
+                Direction::West => active_bounds.min.x - b.max.x,
+                Direction::East => b.min.x - active_bounds.max.x,
+                Direction::North => active_bounds.min.y - b.max.y,
+                Direction::South => b.min.y - active_bounds.max.y,
+                Direction::First | Direction::Last => i32::MAX,
+            }
+        })
 }
 
 pub fn register_commands(app: &mut bevy::app::App) {
@@ -262,20 +296,12 @@ fn command_move_focus(
     }
 
     // Check if the movement can switch to another display.
-    let Some(other_display) = active_display.other().next() else {
-        return;
-    };
-    let change_display = match direction {
-        Direction::North => active_display.bounds().min.y > other_display.bounds().min.y,
-        Direction::South => active_display.bounds().min.y < other_display.bounds().min.y,
-        Direction::West => active_display.bounds().min.x > other_display.bounds().min.x,
-        Direction::East => active_display.bounds().max.x <= other_display.bounds().min.x,
-        Direction::First | Direction::Last => false,
-    };
-    debug!("moving focus to another display: {change_display}");
-    if change_display {
+    if find_display_in_direction(direction, active_display.bounds(), active_display.other())
+        .is_some()
+    {
+        debug!("moving focus to display in direction {direction:?}");
         commands.trigger(SendMessageTrigger(Event::Command {
-            command: Command::Mouse(MouseMove::ToNextDisplay),
+            command: Command::Mouse(MouseMove::ToDisplay(direction.clone())),
         }));
     }
 }
@@ -383,18 +409,11 @@ fn command_swap_focus(
     {
         // Check if the movement can swap to another display.
         let bounds = active_display.bounds();
-        let Some(other_display) = active_display.other().next() else {
-            return;
-        };
-        let change_display = match direction {
-            Direction::North => bounds.min.y > other_display.bounds().min.y,
-            Direction::South => bounds.min.y < other_display.bounds().min.y,
-            Direction::West => bounds.min.x > other_display.bounds().min.x,
-            Direction::East => bounds.max.x <= other_display.bounds().min.x,
-            Direction::First | Direction::Last => false,
-        };
-        debug!("swapping window to another display: {change_display}");
-        if change_display {
+        let others: Vec<_> = active_display.other().collect();
+        if find_display_in_direction(direction, bounds, others.iter().map(|d| &**d))
+            .is_some()
+        {
+            debug!("swapping window to display in direction {direction:?}");
             commands.trigger(SendMessageTrigger(Event::Command {
                 command: Command::Window(Operation::ToNextDisplay),
             }));
@@ -679,7 +698,7 @@ fn to_next_display(
     active_display.active_strip().remove(entity);
 }
 
-/// Moves the mouse pointer to the next available display.
+/// Moves the mouse pointer to the display in the requested direction.
 #[instrument(level = Level::DEBUG, skip_all)]
 #[allow(clippy::needless_pass_by_value)]
 fn mouse_to_next_display(
@@ -691,19 +710,44 @@ fn mouse_to_next_display(
     mut ffm_flag: ResMut<FocusFollowsMouse>,
     mut commands: Commands,
 ) {
-    if !messages.read().any(|event| {
-        matches!(
-            event,
-            Event::Command {
-                command: Command::Mouse(MouseMove::ToNextDisplay),
-            }
-        )
-    }) {
+    let Some(direction) = messages.read().find_map(|event| {
+        if let Event::Command {
+            command: Command::Mouse(MouseMove::ToDisplay(dir)),
+        } = event
+        {
+            Some(dir)
+        } else {
+            None
+        }
+    }) else {
         return;
-    }
+    };
 
-    let Some((other, other_entity, _)) = displays.iter().find(|(_, _, active)| !*active) else {
-        debug!("no other display to move mouse to.");
+    let Some((active_display, _, _)) = displays.iter().find(|(_, _, active)| *active) else {
+        return;
+    };
+    let active_bounds = active_display.bounds();
+
+    // Collect non-active displays so we can search spatially.
+    let others: Vec<_> = displays
+        .iter()
+        .filter(|(_, _, active)| !*active)
+        .collect();
+
+    let Some(target_display) =
+        find_display_in_direction(direction, active_bounds, others.iter().map(|(d, _, _)| *d))
+    else {
+        debug!("no display in direction {direction:?}");
+        return;
+    };
+    let target_id = target_display.id();
+
+    // Find the entity for the target display.
+    let Some((other, other_entity, _)) = others
+        .iter()
+        .find(|(d, _, _)| d.id() == target_id)
+        .copied()
+    else {
         return;
     };
     let Some((other_strip, _)) = window_manager
