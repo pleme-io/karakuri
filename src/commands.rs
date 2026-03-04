@@ -268,7 +268,9 @@ fn command_move_focus(
     let change_display = match direction {
         Direction::North => active_display.bounds().min.y > other_display.bounds().min.y,
         Direction::South => active_display.bounds().min.y < other_display.bounds().min.y,
-        _ => false,
+        Direction::West => active_display.bounds().min.x > other_display.bounds().min.x,
+        Direction::East => active_display.bounds().max.x <= other_display.bounds().min.x,
+        Direction::First | Direction::Last => false,
     };
     debug!("moving focus to another display: {change_display}");
     if change_display {
@@ -387,7 +389,9 @@ fn command_swap_focus(
         let change_display = match direction {
             Direction::North => bounds.min.y > other_display.bounds().min.y,
             Direction::South => bounds.min.y < other_display.bounds().min.y,
-            _ => false,
+            Direction::West => bounds.min.x > other_display.bounds().min.x,
+            Direction::East => bounds.max.x <= other_display.bounds().min.x,
+            Direction::First | Direction::Last => false,
         };
         debug!("swapping window to another display: {change_display}");
         if change_display {
