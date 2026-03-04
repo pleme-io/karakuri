@@ -2,8 +2,9 @@ use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send};
 use objc2_app_kit::{
-    NSBackingStoreType, NSBezierPath, NSColor, NSCompositingOperation, NSFloatingWindowLevel,
-    NSGraphicsContext, NSScreen, NSView, NSWindow, NSWindowCollectionBehavior, NSWindowStyleMask,
+    NSAnimationContext, NSBackingStoreType, NSBezierPath, NSColor, NSCompositingOperation,
+    NSFloatingWindowLevel, NSGraphicsContext, NSScreen, NSView, NSWindow,
+    NSWindowCollectionBehavior, NSWindowStyleMask,
 };
 use objc2_core_foundation::CGFloat;
 use objc2_foundation::{NSPoint, NSRect, NSSize};
@@ -395,6 +396,7 @@ impl OverlayManager {
     }
 
     /// Show or update the snap preview at the given absolute CG frame.
+    /// Uses Core Animation for smooth transitions on high-refresh displays.
     pub fn update_snap_preview(&mut self, abs_cg_frame: NSRect, opacity: f64, border: &BorderParams) {
         // Skip update if the frame hasn't changed.
         if self.snap_preview_frame.as_ref().is_some_and(|f| *f == abs_cg_frame) {
@@ -403,28 +405,47 @@ impl OverlayManager {
 
         let screen_h = primary_screen_height(self.mtm);
         let cocoa_frame = cg_abs_to_cocoa(abs_cg_frame, screen_h);
-        let view_frame = NSRect::new(NSPoint::new(0.0, 0.0), cocoa_frame.size);
 
         if let Some(window) = &self.snap_preview {
-            let view = SnapPreviewView::new(self.mtm, view_frame, opacity, border);
-            window.setContentView(Some(&view));
+            // Animate the frame transition for smooth movement between zones.
+            NSAnimationContext::beginGrouping();
+            let ctx = NSAnimationContext::currentContext();
+            ctx.setDuration(0.15);
+            ctx.setAllowsImplicitAnimation(true);
             window.setFrame_display(cocoa_frame, true);
+            NSAnimationContext::endGrouping();
         } else {
+            // First show: create window, set up view, fade in.
             let window = make_overlay_window(self.mtm, cocoa_frame);
-            // Place above the dim overlay.
             window.setLevel(NSFloatingWindowLevel + 1);
+            let view_frame = NSRect::new(NSPoint::new(0.0, 0.0), cocoa_frame.size);
             let view = SnapPreviewView::new(self.mtm, view_frame, opacity, border);
             window.setContentView(Some(&view));
+            window.setAlphaValue(0.0);
             window.orderFront(None::<&AnyObject>);
+            // Fade in.
+            NSAnimationContext::beginGrouping();
+            let ctx = NSAnimationContext::currentContext();
+            ctx.setDuration(0.12);
+            ctx.setAllowsImplicitAnimation(true);
+            window.setAlphaValue(1.0);
+            NSAnimationContext::endGrouping();
             self.snap_preview = Some(window);
         }
 
         self.snap_preview_frame = Some(abs_cg_frame);
     }
 
-    /// Hide and destroy the snap preview.
+    /// Hide the snap preview with a fade-out animation.
     pub fn hide_snap_preview(&mut self) {
         if let Some(window) = self.snap_preview.take() {
+            // Fade out, then remove.
+            NSAnimationContext::beginGrouping();
+            let ctx = NSAnimationContext::currentContext();
+            ctx.setDuration(0.1);
+            ctx.setAllowsImplicitAnimation(true);
+            window.setAlphaValue(0.0);
+            NSAnimationContext::endGrouping();
             window.orderOut(None::<&AnyObject>);
         }
         self.snap_preview_frame = None;

@@ -1439,21 +1439,43 @@ fn detect_snap_zone(
     }
 }
 
-/// Computes the origin and size for a snap zone within display bounds,
-/// accounting for edge padding.
+/// Computes the origin and size for a snap zone within display bounds.
+/// Outer edges are flush with the display; inner edges use padding for a gap
+/// between halves.
 pub(crate) fn snap_frame(zone: SnapZone, bounds: &IRect, pad: (i32, i32, i32, i32)) -> (Origin, Size) {
     let (pt, pr, pb, pl) = pad;
-    let x = bounds.min.x + pl;
-    let y = bounds.min.y + pt;
-    let w = bounds.width() - pl - pr;
-    let h = bounds.height() - pt - pb;
+    // Full padded region (used for midpoint calculation).
+    let padded_w = bounds.width() - pl - pr;
+    let padded_h = bounds.height() - pt - pb;
+    let mid_x = bounds.min.x + pl + padded_w / 2;
+    let mid_y = bounds.min.y + pt + padded_h / 2;
 
     match zone {
-        SnapZone::LeftHalf => (Origin::new(x, y), Size::new(w / 2, h)),
-        SnapZone::RightHalf => (Origin::new(x + w / 2, y), Size::new(w - w / 2, h)),
-        SnapZone::TopHalf => (Origin::new(x, y), Size::new(w, h / 2)),
-        SnapZone::BottomHalf => (Origin::new(x, y + h / 2), Size::new(w, h - h / 2)),
-        SnapZone::Fullscreen => (Origin::new(x, y), Size::new(w, h)),
+        // Flush left, padded top/bottom, inner edge at midpoint.
+        SnapZone::LeftHalf => (
+            Origin::new(bounds.min.x, bounds.min.y + pt),
+            Size::new(mid_x - bounds.min.x, padded_h),
+        ),
+        // Inner edge at midpoint, flush right, padded top/bottom.
+        SnapZone::RightHalf => (
+            Origin::new(mid_x, bounds.min.y + pt),
+            Size::new(bounds.max.x - mid_x, padded_h),
+        ),
+        // Flush top, padded left/right, inner edge at midpoint.
+        SnapZone::TopHalf => (
+            Origin::new(bounds.min.x + pl, bounds.min.y),
+            Size::new(padded_w, mid_y - bounds.min.y),
+        ),
+        // Inner edge at midpoint, flush bottom, padded left/right.
+        SnapZone::BottomHalf => (
+            Origin::new(bounds.min.x + pl, mid_y),
+            Size::new(padded_w, bounds.max.y - mid_y),
+        ),
+        // Flush on all edges (no padding).
+        SnapZone::Fullscreen => (
+            Origin::new(bounds.min.x, bounds.min.y),
+            Size::new(bounds.width(), bounds.height()),
+        ),
     }
 }
 
