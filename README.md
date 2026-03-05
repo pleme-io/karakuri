@@ -1,86 +1,90 @@
 # Karakuri
 
-A programmable macOS automation framework built on Bevy ECS.
+A programmable macOS tiling window manager built on the Bevy ECS game engine. Karakuri arranges windows on a per-monitor infinite horizontal strip with support for vertical stacking, animated transitions, touchpad gestures, and full Rhai scripting. It also exposes an MCP server for live state inspection and command dispatch from Claude Code.
 
-## About
+Forked from [Paneru](https://github.com/karinushka/paneru), Karakuri retains the infinite-strip layout model while adding a scripting layer, a plugin architecture, and an MCP integration.
 
-Karakuri is a macOS automation framework that extends sliding, tiling window
-management with programmable scripting via Rhai, a Bevy plugin architecture,
-and automation modules (clipboard, notifications, menu bar).
+## Architecture
 
-Forked from [Paneru](https://github.com/karinushka/paneru), Karakuri retains
-the infinite-strip window management model while adding a full scripting layer.
+Karakuri is structured as three decoupled layers connected by the Bevy ECS scheduler:
 
-Each monitor operates with its own independent window strip, ensuring that
-windows remain confined to their respective displays and do not "overflow" onto
-adjacent monitors.
+```
+┌──────────────────────────────────────────────────────────────┐
+│                     Bevy ECS Scheduler                       │
+│                                                              │
+│  PreUpdate     Event Ingestion (pump_events, triggers)       │
+│  Update        State Transitions (window lifecycle, swipe)   │
+│  PostUpdate    Layout → Animation → Rendering                │
+└──────────┬─────────────────┬─────────────────┬───────────────┘
+           │                 │                 │
+    ┌──────▼──────┐   ┌─────▼──────┐   ┌──────▼──────┐
+    │  Platform   │   │  Manager   │   │   Plugins   │
+    │  (macOS)    │   │  (Traits)  │   │  (Bevy)     │
+    │             │   │            │   │             │
+    │  objc2      │   │  Window    │   │  Scripting  │
+    │  CoreGraphx │   │  Display   │   │  Hotkey     │
+    │  A11y API   │   │  Layout    │   │  Clipboard  │
+    │  Gestures   │   │  Process   │   │  Overlay    │
+    └─────────────┘   └────────────┘   │  MenuBar    │
+                                       │  Snapshot   │
+                                       │  Notify     │
+                                       └─────────────┘
+```
+
+Every frame follows a strict five-stage pipeline. No system in a later stage may send events consumed by an earlier stage within the same frame. Layout computation is a pure function: given a window list, display bounds, config, and viewport offset, it emits reposition/resize markers without side effects.
+
+An `InteractionMode` FSM (Idle, Dragging, Swiping, MissionControl) gates system execution via Bevy `States` run conditions.
 
 ## Features
 
-- **Sliding tiling window management** — windows arranged on an infinite strip
-- **Rhai scripting** — programmable hotkeys, event callbacks, and automation
-- **Bevy plugin architecture** — modular, extensible design
-- **Clipboard automation** — history, change detection, programmatic access
-- **Notification system** — send notifications, handle click callbacks
-- **Menu bar integration** — custom status bar items from scripts
-- **Focus follows mouse** — optional mouse-driven focus
-- **Touchpad gestures** — slide windows with swipe gestures
-- **Hot-reload** — scripts and config reload without restart
+- **Sliding tiling layout** -- windows arranged on an infinite horizontal strip per monitor
+- **Vertical stacking** -- stack multiple windows in a single column with equal-height distribution
+- **Rhai scripting** -- programmable hotkeys, event callbacks, and automation via `~/.config/karakuri/scripts/*.rhai`
+- **Bevy plugin architecture** -- modular plugins for clipboard, notifications, menu bar, overlays, and snapshots
+- **MCP server** -- live ECS state inspection and command dispatch for Claude Code (`karakuri mcp`)
+- **Focus follows mouse** -- optional mouse-driven focus tracking
+- **Touchpad gestures** -- four-finger swipe to scroll the window strip
+- **Animated transitions** -- interpolated repositioning with instant-snap during guards and swipes
+- **Window border overlays** -- colored borders and dim-inactive overlays via native Cocoa windows
+- **Edge-snap drag preview** -- visual snap zones during window dragging
+- **Hot-reload** -- configuration and scripts reload automatically without restart
+- **Multi-display** -- independent window strips per monitor with directional focus/swap across displays
+- **Fullscreen integration** -- navigate into and out of native macOS fullscreen windows
+- **Shell command execution** -- bind arbitrary shell commands to hotkeys via `exec` bindings
+- **Wallpaper control** -- set desktop wallpaper from config or scripts
 
 ## Installation
 
-### Recommended System Options
+### Prerequisites
 
-- Karakuri requires accessibility access to move windows. Once it runs you may
-  get a dialog window asking for permissions. Check System Settings under
-  "Privacy & Security -> Accessibility".
+- macOS (Apple Silicon or Intel)
+- Accessibility permissions (System Settings > Privacy & Security > Accessibility)
+- "Displays have separate spaces" enabled in System Settings > Desktop & Dock
 
-- Check your System Settings for "Displays have separate spaces" option. It
-  should be enabled — this allows Karakuri to manage workspaces independently.
-
-- **Multiple displays**: Arrange additional displays above or below (not
-  left/right) to prevent macOS from relocating off-screen windows.
+> **Multiple displays**: Arrange additional displays above or below (not left/right) to prevent macOS from relocating off-screen windows.
 
 ### Installing with Nix
-
-Add the karakuri flake to your inputs.
 
 ```nix
 # flake.nix
 inputs.karakuri = {
   url = "github:pleme-io/karakuri";
   inputs.nixpkgs.follows = "nixpkgs";
-}
+};
 ```
 
-#### Home Manager
-
-Karakuri provides a home manager module to install and configure it.
-
-> [!NOTE]
-> You still need to enable accessibility permissions in the macOS settings
-> the first time karakuri is launched or any time it is updated.
+#### Home Manager Module
 
 ```nix
-# home.nix
 { inputs, ... }:
-
 {
-  imports = [
-    inputs.karakuri.homeModules.karakuri
-  ];
+  imports = [ inputs.karakuri.homeManagerModules.default ];
 
   services.karakuri = {
     enable = true;
     settings = {
       options = {
-        preset_column_widths = [
-          0.25
-          0.33
-          0.5
-          0.66
-          0.75
-        ];
+        preset_column_widths = [ 0.25 0.33 0.5 0.66 0.75 ];
         swipe_gesture_fingers = 4;
         swipe_gesture_direction = "Natural";
         animation_speed = 4000;
@@ -92,8 +96,6 @@ Karakuri provides a home manager module to install and configure it.
         window_focus_south = "cmd - j";
         window_swap_west = "alt - h";
         window_swap_east = "alt - l";
-        window_swap_first = "alt + shift - h";
-        window_swap_last = "alt + shift - l";
         window_center = "alt - c";
         window_resize = "alt - r";
         window_fullwidth = "alt - f";
@@ -107,87 +109,139 @@ Karakuri provides a home manager module to install and configure it.
 }
 ```
 
-### Installing from source
+### Installing from Source
 
-```shell
-$ git clone https://github.com/pleme-io/karakuri.git
-$ cd karakuri
-$ cargo build --release
-$ cargo install --path .
+```bash
+git clone https://github.com/pleme-io/karakuri.git
+cd karakuri
+cargo build --release
+cargo install --path .
 ```
 
-### Configuration
+## Usage
 
-Karakuri checks for configuration in the following locations:
+### Running as a Service
 
-- `$HOME/.karakuri`
-- `$HOME/.karakuri.toml`
-- `$XDG_CONFIG_HOME/karakuri/karakuri.toml`
-
-Additionally it allows overriding the location with `$KARAKURI_CONFIG` environment variable.
-
-Configuration changes are automatically reloaded while Karakuri is running.
-
-### Running as a service
-
-```shell
-$ karakuri install
-$ karakuri start
+```bash
+karakuri install    # Install launchd service
+karakuri start      # Start the service
+karakuri stop       # Stop the service
+karakuri restart    # Restart the service
+karakuri uninstall  # Remove the service
 ```
 
-### Running in the foreground
+### Running in the Foreground
 
-```shell
-$ karakuri
+```bash
+karakuri            # Launch directly (default subcommand)
 ```
 
 ### Sending Commands
 
-Karakuri exposes a `send-cmd` subcommand that lets you control the running
-instance from the command line via a Unix socket (`/tmp/karakuri.socket`):
+Control the running daemon via Unix socket (`/tmp/karakuri.socket`):
 
-```shell
-$ karakuri send-cmd <command> [args...]
+```bash
+karakuri send-cmd <command> [args...]
 ```
-
-#### Available commands
 
 | Command                    | Description                                      |
 | -------------------------- | ------------------------------------------------ |
-| `window focus <direction>` | Move focus to a window in the given direction    |
+| `window focus <direction>` | Move focus in the given direction                |
 | `window swap <direction>`  | Swap the focused window with a neighbour         |
 | `window center`            | Center the focused window on screen              |
 | `window resize`            | Cycle through `preset_column_widths`             |
-| `window fullwidth`         | Toggle full-width mode for the focused window    |
+| `window fullwidth`         | Toggle full-width mode                           |
 | `window manage`            | Toggle managed/floating state                    |
-| `window equalize`          | Distribute equal heights in the focused stack    |
-| `window stack`             | Stack the focused window onto its left neighbour |
-| `window unstack`           | Unstack the focused window into its own column   |
-| `window nextdisplay`       | Move the focused window to the next display      |
-| `mouse nextdisplay`        | Warp the mouse pointer to the next display       |
-| `printstate`               | Print the internal ECS state to the debug log    |
+| `window equalize`          | Distribute equal heights in a stack              |
+| `window stack`             | Stack onto the left neighbour                    |
+| `window unstack`           | Unstack into its own column                      |
+| `window nextdisplay`       | Move window to the next display                  |
+| `mouse nextdisplay`        | Warp mouse to the next display                   |
+| `printstate`               | Print ECS state to the debug log                 |
 | `quit`                     | Quit Karakuri                                    |
 
-Where `<direction>` is one of: `west`, `east`, `north`, `south`, `first`, `last`.
+Directions: `west`, `east`, `north`, `south`, `first`, `last`.
 
-## Architecture
+### MCP Server (Claude Code Integration)
 
-Karakuri's architecture is built around the **Bevy ECS (Entity Component System)**,
-which manages state as a collection of entities (displays, workspaces, applications,
-and windows) and components.
+```bash
+karakuri mcp        # Start MCP server on stdio
+```
 
-The system is decoupled into three primary layers:
+Exposes five tools: `get_state`, `get_focused`, `get_displays`, `get_config`, and `send_command`.
 
-1.  **Platform Layer (`src/platform/`)**: Directly interfaces with macOS via `objc2` and Core Graphics.
-2.  **Management Layer (`src/manager/`)**: Defines OS-agnostic traits that abstract window manipulation.
-3.  **ECS Layer (`src/ecs/`)**: Bevy systems process incoming events, handle input triggers, and manage animations.
+## Configuration
+
+Karakuri searches for configuration in order:
+
+1. `$KARAKURI_CONFIG` environment variable
+2. `$XDG_CONFIG_HOME/karakuri/karakuri.yaml` (preferred YAML format)
+3. `$XDG_CONFIG_HOME/karakuri/karakuri.toml`
+4. `$HOME/.karakuri.toml`
+5. `$HOME/.karakuri`
+
+Configuration changes are automatically hot-reloaded.
+
+### Key Options
+
+| Option | Type | Description |
+|--------|------|-------------|
+| `preset_column_widths` | `[f64]` | Width ratios to cycle through on resize |
+| `animation_speed` | `u32` | Animation duration in milliseconds |
+| `swipe_gesture_fingers` | `u8` | Number of fingers for swipe gestures |
+| `swipe_gesture_direction` | `string` | `"Natural"` or `"Inverted"` |
+| `focus_follows_mouse` | `bool` | Enable mouse-driven focus |
+| `mouse_follows_focus` | `bool` | Warp mouse to focused window |
+| `auto_center` | `bool` | Auto-center focused window |
+| `edge_padding` | `[i32; 4]` | Top, right, bottom, left padding |
+| `wallpaper` | `string` | Path to desktop wallpaper image |
+
+## Development
+
+```bash
+cargo build          # Compile
+cargo clippy         # Lint (pedantic warnings enabled)
+cargo test           # Run unit tests (platform-independent, deterministic)
+cargo run            # Launch (requires macOS Accessibility permissions)
+```
+
+Tests are platform-independent: `pump_events` is a no-op in test mode and events are injected via `world.write_message::<Event>()`. A static `TEST_MUTEX` serializes integration tests to prevent SIGABRT from parallel Bevy App initialization.
+
+## Project Structure
+
+| Path | Purpose |
+|------|---------|
+| `src/main.rs` | CLI entry point (clap), dispatches subcommands |
+| `src/ecs/state.rs` | Bevy States enums, context resources, guards |
+| `src/ecs/systems.rs` | Frame-driven systems (layout, animation, event pump) |
+| `src/ecs/triggers.rs` | Observer-driven triggers (focus, workspace, config, drag) |
+| `src/ecs/params.rs` | Custom SystemParams (Windows, ActiveDisplay, Configuration) |
+| `src/ecs.rs` | Entity helpers, component/marker definitions, app setup |
+| `src/commands.rs` | Command enum and all command handler systems |
+| `src/config.rs` | TOML/YAML config parsing, keybinding resolution |
+| `src/mcp.rs` | MCP server (stdio transport) for Claude Code |
+| `src/plugins/window.rs` | WindowPlugin -- system registration and ordering |
+| `src/plugins/scripting/` | Rhai scripting engine, API registration, script loader |
+| `src/plugins/clipboard.rs` | Clipboard monitoring and history |
+| `src/plugins/notification.rs` | macOS notification dispatch |
+| `src/plugins/menu_bar.rs` | Status bar item management |
+| `src/plugins/hotkey.rs` | Global hotkey registration |
+| `src/plugins/snapshot.rs` | State snapshot for MCP queries |
+| `src/overlay.rs` | Window border and dim-inactive overlay rendering |
+| `src/manager/` | Window, Display, LayoutStrip, Process abstractions |
+| `src/platform/` | macOS platform layer (Accessibility API, gestures, service) |
+| `module/` | Nix home-manager module |
+
+## Related Projects
+
+- [substrate](https://github.com/pleme-io/substrate) -- Nix build patterns (provides `hm-service-helpers`)
+- [blackmatter](https://github.com/pleme-io/blackmatter) -- Home-manager module aggregator
+- [Paneru](https://github.com/karinushka/paneru) -- Original upstream project
 
 ## Credits
 
-Forked from [Paneru](https://github.com/karinushka/paneru) by Karinushka.
-Window management inspired by [Yabai](https://github.com/koekeishiya/yabai),
-[Niri](https://github.com/YaLTeR/niri), and [PaperWM.spoon](https://github.com/mogenson/PaperWM.spoon).
+Forked from [Paneru](https://github.com/karinushka/paneru) by Karinushka. Window management inspired by [Yabai](https://github.com/koekeishiya/yabai), [Niri](https://github.com/YaLTeR/niri), and [PaperWM.spoon](https://github.com/mogenson/PaperWM.spoon).
 
 ## License
 
-MIT
+[MIT](LICENSE.txt)
