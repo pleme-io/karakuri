@@ -1535,6 +1535,7 @@ pub(crate) fn snap_frame(zone: SnapZone, bounds: &IRect, pad: (i32, i32, i32, i3
 pub(crate) fn edge_snap_drag_trigger(
     trigger: On<WMEventTrigger>,
     drag_marker: Query<&WindowDraggedMarker>,
+    fs_windows: Query<&NativeFullscreenMarker>,
     displays: Query<&Display>,
     config: Res<Config>,
     drag_ctx: Option<Res<DragContext>>,
@@ -1557,6 +1558,12 @@ pub(crate) fn edge_snap_drag_trigger(
     } else {
         return;
     };
+
+    // Never show snap preview for windows in native fullscreen — drag events
+    // in fullscreen are text selection, not window moves.
+    if fs_windows.get(entity).is_ok() {
+        return;
+    }
 
     let px = point.x as i32;
     let py = point.y as i32;

@@ -396,7 +396,8 @@ impl OverlayManager {
     }
 
     /// Show or update the snap preview at the given absolute CG frame.
-    /// Uses Core Animation for smooth transitions on high-refresh displays.
+    /// Insets the preview slightly from the zone boundary for a polished look.
+    /// Uses implicit Core Animation for smooth, GPU-accelerated transitions.
     pub fn update_snap_preview(&mut self, abs_cg_frame: NSRect, opacity: f64, border: &BorderParams) {
         // Skip update if the frame hasn't changed.
         if self.snap_preview_frame.as_ref().is_some_and(|f| *f == abs_cg_frame) {
@@ -404,29 +405,45 @@ impl OverlayManager {
         }
 
         let screen_h = primary_screen_height(self.mtm);
-        let cocoa_frame = cg_abs_to_cocoa(abs_cg_frame, screen_h);
+
+        // Inset the preview 4pt from the zone edge for visual breathing room.
+        let inset = 4.0;
+        let inset_frame = NSRect::new(
+            NSPoint::new(abs_cg_frame.origin.x + inset, abs_cg_frame.origin.y + inset),
+            NSSize::new(
+                (abs_cg_frame.size.width - inset * 2.0).max(1.0),
+                (abs_cg_frame.size.height - inset * 2.0).max(1.0),
+            ),
+        );
+        let cocoa_frame = cg_abs_to_cocoa(inset_frame, screen_h);
 
         if let Some(window) = &self.snap_preview {
-            // Animate the frame transition for smooth movement between zones.
+            // Animate the frame transition — smooth movement between zones.
             NSAnimationContext::beginGrouping();
             let ctx = NSAnimationContext::currentContext();
-            ctx.setDuration(0.15);
+            ctx.setDuration(0.2);
             ctx.setAllowsImplicitAnimation(true);
             window.setFrame_display(cocoa_frame, true);
+            // Recreate the view at new size so it draws correctly.
+            let view_frame = NSRect::new(NSPoint::new(0.0, 0.0), cocoa_frame.size);
+            let view = SnapPreviewView::new(self.mtm, view_frame, opacity, border);
+            view.setWantsLayer(true);
+            window.setContentView(Some(&view));
             NSAnimationContext::endGrouping();
         } else {
-            // First show: create window, set up view, fade in.
+            // First show: create window, enable layer-backing for GPU rendering, fade in.
             let window = make_overlay_window(self.mtm, cocoa_frame);
             window.setLevel(NSFloatingWindowLevel + 1);
             let view_frame = NSRect::new(NSPoint::new(0.0, 0.0), cocoa_frame.size);
             let view = SnapPreviewView::new(self.mtm, view_frame, opacity, border);
+            view.setWantsLayer(true);
             window.setContentView(Some(&view));
             window.setAlphaValue(0.0);
             window.orderFront(None::<&AnyObject>);
-            // Fade in.
+            // Fade in with a smooth ease.
             NSAnimationContext::beginGrouping();
             let ctx = NSAnimationContext::currentContext();
-            ctx.setDuration(0.12);
+            ctx.setDuration(0.18);
             ctx.setAllowsImplicitAnimation(true);
             window.setAlphaValue(1.0);
             NSAnimationContext::endGrouping();
@@ -439,10 +456,10 @@ impl OverlayManager {
     /// Hide the snap preview with a fade-out animation.
     pub fn hide_snap_preview(&mut self) {
         if let Some(window) = self.snap_preview.take() {
-            // Fade out, then remove.
+            // Smooth fade out.
             NSAnimationContext::beginGrouping();
             let ctx = NSAnimationContext::currentContext();
-            ctx.setDuration(0.1);
+            ctx.setDuration(0.15);
             ctx.setAllowsImplicitAnimation(true);
             window.setAlphaValue(0.0);
             NSAnimationContext::endGrouping();
