@@ -1363,7 +1363,8 @@ pub(crate) fn refresh_configuration_trigger(
 
     // After a successful config reload, insert a reload guard and trigger
     // a reshuffle so windows snap to the new layout.
-    if reloaded {
+    // In floating mode, skip the reshuffle — unmanaged windows should stay put.
+    if reloaded && !config.is_floating_mode() {
         if let Some(mut guard) = reload_guard {
             guard.bump();
         } else {
@@ -1536,6 +1537,7 @@ pub(crate) fn edge_snap_drag_trigger(
     trigger: On<WMEventTrigger>,
     drag_marker: Query<&WindowDraggedMarker>,
     fs_windows: Query<&NativeFullscreenMarker>,
+    unmanaged: Query<&Unmanaged>,
     displays: Query<&Display>,
     config: Res<Config>,
     drag_ctx: Option<Res<DragContext>>,
@@ -1562,6 +1564,12 @@ pub(crate) fn edge_snap_drag_trigger(
     // Never show snap preview for windows in native fullscreen — drag events
     // in fullscreen are text selection, not window moves.
     if fs_windows.get(entity).is_ok() {
+        return;
+    }
+
+    // Skip unmanaged windows — they're floating outside the layout and
+    // shouldn't trigger snap zones (e.g. Ghostty in copy mode).
+    if unmanaged.get(entity).is_ok() {
         return;
     }
 
