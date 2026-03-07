@@ -1676,6 +1676,7 @@ pub(crate) fn reposition_dragged_window(
         WindowDraggedMarker {
             entity,
             display_id: _,
+            ..
         },
         _,
     ) in markers

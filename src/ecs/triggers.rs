@@ -199,6 +199,7 @@ pub(crate) fn mouse_dragged_trigger(
     mut drag_marker: Query<(&mut Timeout, &mut WindowDraggedMarker)>,
     window_manager: Res<WindowManager>,
     config: Configuration,
+    swipe_tracker: SmoothSwipeTracking,
     mut commands: Commands,
 ) {
     const DRAG_MARKER_TIMEOUT_MS: u64 = 1000;
@@ -206,6 +207,12 @@ pub(crate) fn mouse_dragged_trigger(
         return;
     };
     if config.mission_control_active() {
+        return;
+    }
+    // Suppress drag markers during swipe gestures — three-finger swipe
+    // generates both Gesture (→ Swipe) and LeftMouseDragged (→ MouseDragged)
+    // events; without this guard the drag path grabs individual windows.
+    if swipe_tracker.active() {
         return;
     }
     // Drag markers are always created regardless of mouse_disconnected().
@@ -237,11 +244,13 @@ pub(crate) fn mouse_dragged_trigger(
             window.id(),
         );
         let timeout = Timeout::new(Duration::from_millis(DRAG_MARKER_TIMEOUT_MS), None);
+        let origin = window.frame().min;
         commands.spawn((
             timeout,
             WindowDraggedMarker {
                 entity,
                 display_id: active_display.id(),
+                initial_origin: origin,
             },
         ));
     }
@@ -1538,6 +1547,7 @@ pub(crate) fn edge_snap_drag_trigger(
     drag_marker: Query<&WindowDraggedMarker>,
     fs_windows: Query<&NativeFullscreenMarker>,
     unmanaged: Query<&Unmanaged>,
+    windows: Query<&Window>,
     displays: Query<&Display>,
     config: Res<Config>,
     drag_ctx: Option<Res<DragContext>>,
@@ -1555,11 +1565,12 @@ pub(crate) fn edge_snap_drag_trigger(
     // re-querying find_window_at_point. At multi-monitor boundaries the
     // hit-test can return a window on the adjacent display, causing snap
     // direction to flip.
-    let entity = if let Ok(marker) = drag_marker.single() {
-        marker.entity
+    let marker = if let Ok(m) = drag_marker.single() {
+        m
     } else {
         return;
     };
+    let entity = marker.entity;
 
     // Never show snap preview for windows in native fullscreen — drag events
     // in fullscreen are text selection, not window moves.
@@ -1571,6 +1582,15 @@ pub(crate) fn edge_snap_drag_trigger(
     // shouldn't trigger snap zones (e.g. Ghostty in copy mode).
     if unmanaged.get(entity).is_ok() {
         return;
+    }
+
+    // Only snap when the window has actually moved from its initial position.
+    // Mouse drags inside a window (text selection, scrolling) don't move the
+    // window itself and should never trigger snap zones.
+    if let Ok(win) = windows.get(entity) {
+        if win.frame().min == marker.initial_origin {
+            return;
+        }
     }
 
     let px = point.x as i32;

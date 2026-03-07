@@ -14,6 +14,7 @@ use bevy::tasks::Task;
 use bevy::time::Timer;
 use bevy::time::{Time, Virtual};
 use bevy::ecs::{component::Component, entity::Entity};
+use bevy::math::IVec2;
 use derive_more::{Deref, DerefMut};
 use objc2_core_graphics::CGDirectDisplayID;
 
@@ -80,6 +81,10 @@ pub struct WindowDraggedMarker {
     pub entity: Entity,
     /// The ID of the display the window is being dragged on.
     pub display_id: CGDirectDisplayID,
+    /// Window origin when the drag started — used to detect actual window moves
+    /// vs. in-window interactions (text selection, scrolling). Snap only triggers
+    /// when the window has moved from this initial position.
+    pub initial_origin: IVec2,
 }
 
 /// Marker component indicating that windows around the marked entity need to be reshuffled.
