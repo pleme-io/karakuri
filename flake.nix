@@ -18,6 +18,7 @@
       self,
       nixpkgs,
       substrate,
+      ...
     }:
     let
       system = "aarch64-darwin";
