@@ -21,7 +21,8 @@ use super::{
     Timeout, Unmanaged, WMEventTrigger, WindowDraggedMarker,
 };
 use crate::ecs::state::{FullscreenSpace, ReloadGuard};
-use crate::config::{Config, EdgeSnapConfig, WindowParams};
+use crate::config::{Config, WindowParams};
+use crate::logic::{drag, snap};
 use crate::ecs::params::{
     ActiveDisplay, ActiveDisplayMut, Configuration, ConfigurationMut, SmoothSwipeTracking, Windows,
 };
@@ -709,6 +710,7 @@ pub(crate) fn swipe_gesture_trigger(
     focused_window: Single<(&Window, Entity), With<FocusedMarker>>,
     active_display: ActiveDisplay,
     config: Configuration,
+    drag_markers: Query<Entity, With<WindowDraggedMarker>>,
     mut commands: Commands,
 ) {
     let Event::Swipe { ref deltas } = trigger.event().0 else {
@@ -727,6 +729,14 @@ pub(crate) fn swipe_gesture_trigger(
     let delta = deltas.iter().sum::<f64>();
     if delta.abs() < swipe_resolution {
         return;
+    }
+
+    // Remove any drag markers created by synthetic MouseDragged events that
+    // preceded this Swipe in the same dispatch batch. macOS generates both
+    // LeftMouseDragged and Gesture events for three-finger swipes; the drag
+    // event can arrive first and create a marker before SwipeContext exists.
+    for marker_entity in &drag_markers {
+        commands.entity(marker_entity).despawn();
     }
 
     let (_, entity) = *focused_window;
@@ -876,41 +886,6 @@ pub(crate) fn window_unmanaged_trigger(
     const UNMANAGED_MAX_SCREEN_RATIO_DEN: i32 = 5;
     const UNMANAGED_POP_OFFSET: i32 = 32;
 
-    fn clamp_origin_to_bounds(origin: IRect, size: Size, bounds: IRect) -> IRect {
-        let max = (bounds.max - size).max(bounds.min);
-        let min = origin.min.clamp(bounds.min, max);
-        IRect::from_corners(min, min + size)
-    }
-
-    fn offset_frame_within_bounds(frame: IRect, bounds: IRect, offset: i32) -> IRect {
-        let candidates = [
-            (offset, offset),
-            (offset, -offset),
-            (-offset, offset),
-            (-offset, -offset),
-            (offset, 0),
-            (-offset, 0),
-            (0, offset),
-            (0, -offset),
-        ];
-
-        for (dx, dy) in candidates {
-            let moved = IRect::from_corners(
-                Origin::new(frame.min.x + dx, frame.min.y + dy),
-                Origin::new(frame.max.x + dx, frame.max.y + dy),
-            );
-            if moved.min.x >= bounds.min.x
-                && moved.max.x <= bounds.max.x
-                && moved.min.y >= bounds.min.y
-                && moved.max.y <= bounds.max.y
-            {
-                return moved;
-            }
-        }
-
-        frame
-    }
-
     let entity = trigger.event().entity;
     let Some(marker) = windows
         .get_managed(trigger.event().entity)
@@ -957,9 +932,9 @@ pub(crate) fn window_unmanaged_trigger(
                 let mut target_frame =
                     IRect::from_corners(frame.min, frame.min + Origin::new(new_width, new_height));
                 target_frame =
-                    clamp_origin_to_bounds(target_frame, target_frame.size(), display_bounds);
+                    drag::clamp_origin_to_bounds(target_frame, target_frame.size(), display_bounds);
                 target_frame =
-                    offset_frame_within_bounds(target_frame, display_bounds, UNMANAGED_POP_OFFSET);
+                    drag::offset_frame_within_bounds(target_frame, display_bounds, UNMANAGED_POP_OFFSET);
 
                 if target_frame.size() != frame.size() {
                     resize_entity(
@@ -1470,73 +1445,7 @@ pub(crate) fn send_message_trigger(
 
 // ── Edge Snapping ──────────────────────────────────────────────────────────
 
-/// Determines which snap zone the cursor is near, if any.
-fn detect_snap_zone(
-    px: i32,
-    py: i32,
-    bounds: &IRect,
-    threshold: i32,
-    snap: &EdgeSnapConfig,
-) -> Option<SnapZone> {
-    let near_left = px - bounds.min.x < threshold;
-    let near_right = bounds.max.x - px < threshold;
-    let near_top = py - bounds.min.y < threshold;
-    let near_bottom = bounds.max.y - py < threshold;
-
-    if near_left && snap.left.unwrap_or(false) {
-        Some(SnapZone::LeftHalf)
-    } else if near_right && snap.right.unwrap_or(false) {
-        Some(SnapZone::RightHalf)
-    } else if near_top && near_left && snap.fullscreen.unwrap_or(false) {
-        Some(SnapZone::Fullscreen)
-    } else if near_top && snap.top.unwrap_or(false) {
-        Some(SnapZone::TopHalf)
-    } else if near_bottom && snap.bottom.unwrap_or(false) {
-        Some(SnapZone::BottomHalf)
-    } else {
-        None
-    }
-}
-
-/// Computes the origin and size for a snap zone within display bounds.
-/// Outer edges are flush with the display; inner edges use padding for a gap
-/// between halves.
-pub(crate) fn snap_frame(zone: SnapZone, bounds: &IRect, pad: (i32, i32, i32, i32)) -> (Origin, Size) {
-    let (pt, pr, pb, pl) = pad;
-    // Full padded region (used for midpoint calculation).
-    let padded_w = bounds.width() - pl - pr;
-    let padded_h = bounds.height() - pt - pb;
-    let mid_x = bounds.min.x + pl + padded_w / 2;
-    let mid_y = bounds.min.y + pt + padded_h / 2;
-
-    match zone {
-        // Flush left, padded top/bottom, inner edge at midpoint.
-        SnapZone::LeftHalf => (
-            Origin::new(bounds.min.x, bounds.min.y + pt),
-            Size::new(mid_x - bounds.min.x, padded_h),
-        ),
-        // Inner edge at midpoint, flush right, padded top/bottom.
-        SnapZone::RightHalf => (
-            Origin::new(mid_x, bounds.min.y + pt),
-            Size::new(bounds.max.x - mid_x, padded_h),
-        ),
-        // Flush top, padded left/right, inner edge at midpoint.
-        SnapZone::TopHalf => (
-            Origin::new(bounds.min.x + pl, bounds.min.y),
-            Size::new(padded_w, mid_y - bounds.min.y),
-        ),
-        // Inner edge at midpoint, flush bottom, padded left/right.
-        SnapZone::BottomHalf => (
-            Origin::new(bounds.min.x + pl, mid_y),
-            Size::new(padded_w, bounds.max.y - mid_y),
-        ),
-        // Flush on all edges (no padding).
-        SnapZone::Fullscreen => (
-            Origin::new(bounds.min.x, bounds.min.y),
-            Size::new(bounds.width(), bounds.height()),
-        ),
-    }
-}
+// detect_snap_zone and snap_frame moved to crate::logic::snap
 
 /// Tracks the cursor during a drag and updates `DragContext` with the
 /// current snap zone. Only active in floating mode with at least one snap
@@ -1609,7 +1518,7 @@ pub(crate) fn edge_snap_drag_trigger(
     };
 
     let bounds = display.bounds();
-    let zone = detect_snap_zone(px, py, &bounds, threshold, &snap_cfg);
+    let zone = snap::detect_snap_zone(px, py, &bounds, threshold, &snap_cfg);
 
     // Only insert/update when the state actually changes.
     let needs_update = drag_ctx
@@ -1664,7 +1573,7 @@ pub(crate) fn edge_snap_release_trigger(
 
     let bounds = display.bounds();
     let pad = config.edge_padding();
-    let (origin, size) = snap_frame(zone, &bounds, pad);
+    let (origin, size) = snap::snap_frame(zone, &bounds, pad);
 
     debug!("edge snap: {zone:?} → origin={origin}, size={size}");
     reposition_entity(entity, origin, display_id, &mut commands);

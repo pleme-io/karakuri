@@ -30,6 +30,7 @@ use crate::ecs::{
     state::{AppPhase, DragContext, InteractionMode, ReloadGuard, SwipeContext},
 };
 use crate::events::Event;
+use crate::logic::swipe as swipe_logic;
 use crate::manager::{
     Application, Column, Display, LayoutStrip, Origin, Process, Size, Window, WindowManager,
     WindowOS, bruteforce_windows,
@@ -828,8 +829,12 @@ pub(crate) fn window_swiper(
     };
 
     for (entity, unmanaged, WindowSwipeMarker(delta)) in sliding {
-        let delta = delta * config.swipe_sensitivity();
-        let shift = (f64::from(viewport.width()) * delta * swipe_direction_modifier) as i32;
+        let shift = swipe_logic::delta_to_shift(
+            *delta,
+            config.swipe_sensitivity(),
+            viewport.width(),
+            swipe_direction_modifier,
+        );
 
         commands.entity(entity).try_remove::<WindowSwipeMarker>();
 
@@ -871,15 +876,16 @@ pub(crate) fn window_swiper(
             offset
         };
 
-        let clamped_offset = if config.continuous_swipe() {
-            viewport_offset + shift
-        } else {
-            let (_, pad_right, _, pad_left) = config.edge_padding();
-            let effective_width = viewport.width() - pad_left - pad_right;
-            let left_aligned = -pad_left;
-            let right_aligned = total_strip_width - effective_width - pad_left;
-            (viewport_offset + shift).clamp(left_aligned, right_aligned.max(left_aligned))
-        };
+        let (_, pad_right, _, pad_left) = config.edge_padding();
+        let clamped_offset = swipe_logic::clamp_viewport_offset(
+            viewport_offset,
+            shift,
+            total_strip_width,
+            viewport.width(),
+            pad_left,
+            pad_right,
+            config.continuous_swipe(),
+        );
 
         position_layout_windows(
             clamped_offset,
@@ -892,14 +898,12 @@ pub(crate) fn window_swiper(
             &mut commands,
         );
 
-        // Compute velocity (normalized units/sec) for inertia after finger-lift.
-        // EMA smoothing: 30% new + 70% old prevents jittery frames from dominating.
         let dt = time.delta_secs_f64();
-        let new_velocity = if dt > 0.0 { delta / dt } else { 0.0 };
+        let new_velocity = if dt > 0.0 { *delta / dt } else { 0.0 };
         let old_velocity = swipe_tracker
             .position()
             .map_or(0.0, |(velocity, _)| velocity);
-        let velocity = 0.3 * new_velocity + 0.7 * old_velocity;
+        let velocity = swipe_logic::smooth_velocity(new_velocity, old_velocity);
 
         SmoothSwipeTracking::refresh(velocity, clamped_offset, &mut commands);
         next_mode.set(InteractionMode::Swiping);
@@ -926,40 +930,31 @@ pub(crate) fn swipe_idle_tracker(
     mut next_mode: ResMut<bevy::state::state::NextState<InteractionMode>>,
     mut commands: Commands,
 ) {
-    /// Sub-pixel velocity threshold — stop inertia when below this.
     const MIN_VELOCITY_PX: f64 = 100.0;
 
     if swipe.sliding() {
         return;
     }
 
-    let display_width = f64::from(active_display.bounds().width());
+    let display_width = active_display.bounds().width();
     let Some((velocity, viewport_offset)) = swipe.position() else {
         return;
     };
 
-    // Sub-pixel velocity — stop inertia and commit.
-    if velocity.abs() * display_width < MIN_VELOCITY_PX {
-        // Focus the window under the cursor immediately so a subsequent
-        // swipe anchors on the correct window.  Fires before cooldown so
-        // there is no perceptible delay.
+    if swipe_logic::below_stop_threshold(velocity, display_width, MIN_VELOCITY_PX) {
         if config.options().focus_follows_mouse.is_none_or(|ffm| ffm)
             && let Some(point) = window_manager.cursor_position()
         {
             commands.trigger(WMEventTrigger(Event::MouseMoved { point }));
         }
-        // Start cooldown — keep SwipeActive alive for 2 more pump cycles
-        // (~33ms at 60fps) so echo-backs and macOS reconciliation events
-        // are silenced before the resource is removed.
         debug!("swipe cooldown done, removing SwipeActive");
         commands.remove_resource::<SwipeContext>();
         next_mode.set(InteractionMode::Idle);
         return;
     }
 
-    // Apply one frame of decaying velocity as a synthetic swipe.
     let dt = time.delta_secs_f64();
-    let frame_delta = velocity * dt;
+    let shift = swipe_logic::velocity_to_pixel_shift(velocity, dt, display_width, 1.0);
 
     let get_window_frame = |entity| get_moving_window_frame(entity, &active_display, &windows);
     let get_window_h_pad = |entity: Entity| {
@@ -969,30 +964,29 @@ pub(crate) fn swipe_idle_tracker(
             .unwrap_or(0)
     };
 
-    // Use the stored viewport_offset — deriving it from window positions
-    // would give wrong results when edge windows have been sliver-clamped.
-    let shift = (display_width * frame_delta) as i32;
-    let new_offset = if config.continuous_swipe() {
-        viewport_offset + shift
-    } else {
+    let total_strip_width = {
         let strip = active_display.active_strip();
-        let mut viewport = active_display.bounds();
-        viewport.max.y = viewport.min.y + get_display_height(&active_display);
-
-        let mut total_strip_width = 0_i32;
+        let mut w = 0_i32;
         for (col, pos) in strip.absolute_positions(&get_window_frame) {
             if let Some(top) = col.top()
                 && let Some(frame) = get_window_frame(top)
             {
-                total_strip_width = pos + frame.width();
+                w = pos + frame.width();
             }
         }
-        let (_, pad_right, _, pad_left) = config.edge_padding();
-        let effective_width = viewport.width() - pad_left - pad_right;
-        let left_aligned = -pad_left;
-        let right_aligned = total_strip_width - effective_width - pad_left;
-        (viewport_offset + shift).clamp(left_aligned, right_aligned.max(left_aligned))
+        w
     };
+
+    let (_, pad_right, _, pad_left) = config.edge_padding();
+    let new_offset = swipe_logic::clamp_viewport_offset(
+        viewport_offset,
+        shift,
+        total_strip_width,
+        active_display.bounds().width(),
+        pad_left,
+        pad_right,
+        config.continuous_swipe(),
+    );
 
     position_layout_windows(
         new_offset,
@@ -1006,7 +1000,8 @@ pub(crate) fn swipe_idle_tracker(
     );
 
     let decay_rate = config.swipe_deceleration();
-    swipe.update_position((-decay_rate * dt).exp(), new_offset);
+    let decay_factor = (-decay_rate * dt).exp();
+    swipe.update_position(decay_factor, new_offset);
 }
 
 fn expose_window(
@@ -1696,8 +1691,7 @@ pub(crate) fn update_overlays(
     overlay_mgr: Option<NonSendMut<OverlayManager>>,
     config: Configuration,
 ) {
-    use crate::overlay::BorderParams;
-    use objc2_foundation::{NSPoint, NSRect, NSSize};
+    use crate::overlay::{BorderParams, OverlayApi};
 
     let Some(mut overlay_mgr) = overlay_mgr else {
         return;
@@ -1713,7 +1707,7 @@ pub(crate) fn update_overlays(
 
     // Find the focused managed window's absolute CG frame.
     // Skip floating/unmanaged windows — no overlay or border for those.
-    let (focused_abs_cg, focused_border_radius) = if let Some((window, _, unmanaged)) = windows
+    let (focused_frame, focused_border_radius) = if let Some((window, _, unmanaged)) = windows
         .focused()
         .and_then(|(_, entity)| windows.get_managed(entity))
         && unmanaged.is_none()
@@ -1722,15 +1716,11 @@ pub(crate) fn update_overlays(
         let frame = window.frame();
         let h_pad = window.horizontal_padding();
         let v_pad = window.vertical_padding();
-        let focused_abs_cg = Some(NSRect::new(
-            NSPoint::new(
-                f64::from(frame.min.x + h_pad),
-                f64::from(frame.min.y + v_pad),
-            ),
-            NSSize::new(
-                f64::from(frame.width() - 2 * h_pad),
-                f64::from(frame.height() - 2 * v_pad),
-            ),
+        let focused_frame = Some(IRect::new(
+            frame.min.x + h_pad,
+            frame.min.y + v_pad,
+            frame.max.x - h_pad,
+            frame.max.y - v_pad,
         ));
 
         // Look up per-window border_radius from config (dynamic, respects hot-reload).
@@ -1743,11 +1733,8 @@ pub(crate) fn update_overlays(
         let properties = config.find_window_properties(&title, bundle_id);
         let focused_border_radius = properties.iter().find_map(|p| p.border_radius);
 
-        (focused_abs_cg, focused_border_radius)
+        (focused_frame, focused_border_radius)
     } else {
-        // No managed window has focus — hide the overlay rather than
-        // dimming everything (e.g. during startup or when only floating
-        // windows exist).
         overlay_mgr.hide_all();
         return;
     };
@@ -1763,7 +1750,7 @@ pub(crate) fn update_overlays(
     overlay_mgr.update(
         dim_opacity,
         dim_color,
-        focused_abs_cg,
+        focused_frame,
         border_params.as_ref(),
     );
 }
@@ -1776,9 +1763,8 @@ pub(crate) fn update_snap_preview(
     config: Res<Config>,
     overlay_mgr: Option<NonSendMut<OverlayManager>>,
 ) {
-    use crate::ecs::triggers::snap_frame;
-    use crate::overlay::BorderParams;
-    use objc2_foundation::{NSPoint, NSRect, NSSize};
+    use crate::logic::snap::snap_frame;
+    use crate::overlay::{BorderParams, OverlayApi};
 
     let Some(mut overlay_mgr) = overlay_mgr else {
         return;
@@ -1805,11 +1791,7 @@ pub(crate) fn update_snap_preview(
     let bounds = display.bounds();
     let pad = config.edge_padding();
     let (origin, size) = snap_frame(zone, &bounds, pad);
-
-    let abs_cg_frame = NSRect::new(
-        NSPoint::new(f64::from(origin.x), f64::from(origin.y)),
-        NSSize::new(f64::from(size.x), f64::from(size.y)),
-    );
+    let frame = IRect::from_corners(origin, origin + size);
 
     let opacity = config.edge_snap_preview_opacity();
     let border = BorderParams {
@@ -1819,7 +1801,7 @@ pub(crate) fn update_snap_preview(
         radius: config.border_radius(),
     };
 
-    overlay_mgr.update_snap_preview(abs_cg_frame, opacity, &border);
+    overlay_mgr.update_snap_preview(frame, opacity, &border);
 }
 
 /// Despawns stale `WindowDraggedMarker` entities during a swipe.
@@ -1843,6 +1825,7 @@ pub(crate) fn hide_overlays_on_mode_change(
     overlay_mgr: Option<NonSendMut<OverlayManager>>,
 ) {
     if let Some(mut overlay_mgr) = overlay_mgr {
+        use crate::overlay::OverlayApi;
         overlay_mgr.hide_all();
     }
 }

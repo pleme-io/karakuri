@@ -1,3 +1,4 @@
+use bevy::math::IRect;
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send};
@@ -15,6 +16,31 @@ pub struct BorderParams {
     pub opacity: f64,
     pub width: f64,
     pub radius: f64,
+}
+
+/// Platform-neutral overlay interface for dim, border, and snap preview rendering.
+///
+/// The macOS implementation (`OverlayManager`) manages Cocoa windows with
+/// Core Animation. Tests can use a mock to verify overlay decisions without
+/// the Cocoa runtime.
+pub trait OverlayApi {
+    /// Update the dim + border overlay.
+    /// `focused_frame` is the focused window rect in absolute CG coordinates.
+    fn update(
+        &mut self,
+        dim_opacity: f64,
+        dim_color: (f64, f64, f64),
+        focused_frame: Option<IRect>,
+        border: Option<&BorderParams>,
+    );
+    /// Show or update the snap preview at the given frame.
+    fn update_snap_preview(&mut self, frame: IRect, opacity: f64, border: &BorderParams);
+    /// Hide the snap preview.
+    fn hide_snap_preview(&mut self);
+    /// Remove all overlays.
+    fn remove_all(&mut self);
+    /// Hide all overlays (preserves state for re-show).
+    fn hide_all(&mut self);
 }
 
 /// Parameters for the fullscreen dim + cutout overlay.
@@ -335,10 +361,10 @@ impl OverlayManager {
         }
     }
 
-    /// Update the single fullscreen overlay.
+    /// Update the single fullscreen overlay (Cocoa impl).
     /// `focused_abs_cg` is the focused window rect in absolute CG coords,
     /// or `None` if no window is focused.
-    pub fn update(
+    fn update_cocoa(
         &mut self,
         dim_opacity: f64,
         dim_color: (f64, f64, f64),
@@ -395,10 +421,8 @@ impl OverlayManager {
         }
     }
 
-    /// Show or update the snap preview at the given absolute CG frame.
-    /// Insets the preview slightly from the zone boundary for a polished look.
-    /// Uses implicit Core Animation for smooth, GPU-accelerated transitions.
-    pub fn update_snap_preview(&mut self, abs_cg_frame: NSRect, opacity: f64, border: &BorderParams) {
+    /// Show or update the snap preview at the given absolute CG frame (Cocoa impl).
+    fn update_snap_preview_cocoa(&mut self, abs_cg_frame: NSRect, opacity: f64, border: &BorderParams) {
         // Skip update if the frame hasn't changed.
         if self.snap_preview_frame.as_ref().is_some_and(|f| *f == abs_cg_frame) {
             return;
@@ -454,7 +478,7 @@ impl OverlayManager {
     }
 
     /// Hide the snap preview with a fade-out animation.
-    pub fn hide_snap_preview(&mut self) {
+    fn hide_snap_preview_impl(&mut self) {
         if let Some(window) = self.snap_preview.take() {
             // Smooth fade out.
             NSAnimationContext::beginGrouping();
@@ -468,15 +492,15 @@ impl OverlayManager {
         self.snap_preview_frame = None;
     }
 
-    pub fn remove_all(&mut self) {
+    fn remove_all_impl(&mut self) {
         if let Some((window, _)) = self.overlay.take() {
             window.orderOut(None::<&AnyObject>);
         }
-        self.hide_snap_preview();
+        OverlayManager::hide_snap_preview_impl(self);
         self.hidden = false;
     }
 
-    pub fn hide_all(&mut self) {
+    pub fn hide_all_impl(&mut self) {
         if self.hidden {
             return;
         }
@@ -484,5 +508,40 @@ impl OverlayManager {
             window.orderOut(None::<&AnyObject>);
         }
         self.hidden = true;
+    }
+}
+
+fn irect_to_nsrect(rect: IRect) -> NSRect {
+    NSRect::new(
+        NSPoint::new(f64::from(rect.min.x), f64::from(rect.min.y)),
+        NSSize::new(f64::from(rect.width()), f64::from(rect.height())),
+    )
+}
+
+impl OverlayApi for OverlayManager {
+    fn update(
+        &mut self,
+        dim_opacity: f64,
+        dim_color: (f64, f64, f64),
+        focused_frame: Option<IRect>,
+        border: Option<&BorderParams>,
+    ) {
+        self.update_cocoa(dim_opacity, dim_color, focused_frame.map(irect_to_nsrect), border);
+    }
+
+    fn update_snap_preview(&mut self, frame: IRect, opacity: f64, border: &BorderParams) {
+        self.update_snap_preview_cocoa(irect_to_nsrect(frame), opacity, border);
+    }
+
+    fn hide_snap_preview(&mut self) {
+        self.hide_snap_preview_impl();
+    }
+
+    fn remove_all(&mut self) {
+        self.remove_all_impl();
+    }
+
+    fn hide_all(&mut self) {
+        self.hide_all_impl();
     }
 }

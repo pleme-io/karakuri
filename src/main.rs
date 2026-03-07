@@ -8,6 +8,7 @@ mod config;
 mod ecs;
 mod errors;
 mod events;
+mod logic;
 mod manager;
 mod mcp;
 mod overlay;

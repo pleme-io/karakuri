@@ -5,7 +5,7 @@
 ```bash
 cargo build          # compile
 cargo clippy         # lint (zero new warnings required)
-cargo test           # 29 unit tests, deterministic (no platform deps)
+cargo test           # 100+ unit tests, deterministic (no platform deps)
 cargo run            # launch (requires macOS Accessibility permissions)
 ```
 
@@ -123,10 +123,55 @@ test commands directly, not input device → event → command chains.
 - **Static TEST_MUTEX**: All integration tests serialize to prevent SIGABRT
   from parallel Bevy App initialization
 
+## Pure Logic Extraction (`src/logic/`)
+
+All decision-making and math that can be tested without Bevy or macOS
+dependencies lives in `src/logic/`. ECS systems and triggers call into
+these modules — they never contain the algorithm inline.
+
+| Module | Functions | Tests |
+|--------|-----------|-------|
+| `logic/snap.rs` | `detect_snap_zone`, `snap_frame` | 14 |
+| `logic/navigation.rs` | `window_in_direction`, `display_in_direction` | 24 |
+| `logic/swipe.rs` | `smooth_velocity`, `decay_velocity`, `velocity_to_pixel_shift`, `clamp_viewport_offset`, `below_stop_threshold`, `delta_to_shift`, `below_swipe_resolution` | 31 |
+| `logic/drag.rs` | `clamp_origin_to_bounds`, `offset_frame_within_bounds` | 15 |
+
+**Convention**: When adding new behavior, write the pure function in `logic/`
+first with unit tests, then call it from the ECS layer. The ECS layer handles
+entity queries, resource access, and command dispatch — never branching logic
+or math.
+
+## Platform Isolation (trait boundaries)
+
+All macOS system interactions are behind trait boundaries for testability:
+
+| Trait | macOS Impl | Mock | Purpose |
+|-------|------------|------|---------|
+| `WindowManagerApi` | `WindowManagerOS` | `MockWindowManager` | SkyLight, display/space queries, cursor |
+| `WindowApi` | `WindowOS` | `MockWindow` | AX accessibility (frame, focus, resize) |
+| `ProcessApi` | `ProcessOS` | `MockProcess` | Carbon process events, NSRunningApplication |
+| `ApplicationApi` | `ApplicationOS` | `MockApplication` | AX observer, window discovery |
+| `OverlayApi` | `OverlayManager` | (use `Option<>` guard) | Cocoa overlay windows (dim, border, snap preview) |
+
+**Event isolation**: Platform handlers (InputHandler, DisplayHandler, ProcessHandler,
+WorkspaceObserver) fire events through an MPSC channel. ECS systems only consume
+`Event` messages — never call platform APIs directly. Tests inject events via
+`world.write_message::<Event>()`.
+
+**NonSend resources**: `OverlayManager` and `PlatformCallbacks` are stored as
+`Option<NonSendMut<T>>`. Systems short-circuit with `return` when absent (in tests).
+The `OverlayApi` trait enables future mock injection if needed.
+
+**Adapter pattern for Display lookups**: `logic/navigation::display_in_direction`
+takes `&[IRect]` and returns `Option<usize>`. Call sites in `commands.rs`
+collect Display refs into a Vec, extract bounds, call the pure function, and
+index back to get the Display.
+
 ## File Map
 
 | Path | Purpose |
 |------|---------|
+| `src/logic/` | Pure testable logic (snap, navigation, swipe, drag) |
 | `src/ecs/state.rs` | Bevy States enums, context resources, guards |
 | `src/ecs/systems.rs` | All frame-driven systems (layout, animation, event pump) |
 | `src/ecs/triggers.rs` | Observer-driven triggers (focus, workspace, config, drag) |
@@ -136,7 +181,7 @@ test commands directly, not input device → event → command chains.
 | `src/config.rs` | TOML config parsing, keybinding resolution |
 | `src/manager/` | Window, Display, LayoutStrip, Process abstractions |
 | `src/platform/` | macOS platform layer (Accessibility API, gestures) |
-| `src/commands/` | User command implementations (focus, swap, resize, etc.) |
+| `src/commands.rs` | User command implementations (focus, swap, resize, etc.) |
 | `src/overlay.rs` | Window border and dim-inactive overlay rendering |
 
 ## Patterns from the WM Ecosystem

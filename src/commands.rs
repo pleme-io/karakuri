@@ -16,6 +16,7 @@ use crate::ecs::{
     state::{FocusContext, FullscreenSpace},
 };
 use crate::events::Event;
+use crate::logic::navigation;
 use crate::manager::{
     Application, Column, Display, LayoutStrip, Origin, Size, Window, WindowManager, origin_to,
 };
@@ -87,28 +88,9 @@ fn find_display_in_direction<'a>(
     active_bounds: IRect,
     others: impl Iterator<Item = &'a Display>,
 ) -> Option<&'a Display> {
-    others
-        .filter(|d| {
-            let b = d.bounds();
-            match direction {
-                Direction::West => b.min.x < active_bounds.min.x,
-                Direction::East => b.min.x >= active_bounds.max.x,
-                Direction::North => b.min.y < active_bounds.min.y,
-                Direction::South => b.min.y >= active_bounds.max.y,
-                Direction::First | Direction::Last => false,
-            }
-        })
-        .min_by_key(|d| {
-            let b = d.bounds();
-            match direction {
-                // Nearest to the left / right / above / below
-                Direction::West => active_bounds.min.x - b.max.x,
-                Direction::East => b.min.x - active_bounds.max.x,
-                Direction::North => active_bounds.min.y - b.max.y,
-                Direction::South => b.min.y - active_bounds.max.y,
-                Direction::First | Direction::Last => i32::MAX,
-            }
-        })
+    let displays: Vec<&Display> = others.collect();
+    let bounds: Vec<IRect> = displays.iter().map(|d| d.bounds()).collect();
+    navigation::display_in_direction(direction, active_bounds, &bounds).map(|idx| displays[idx])
 }
 
 pub fn register_commands(app: &mut bevy::app::App) {
@@ -149,57 +131,13 @@ fn filter_window_operations<'a, F: Fn(&Operation) -> bool>(
     })
 }
 
-/// Retrieves a window `Entity` in a specified direction relative to a `current_window_id` within a `LayoutStrip`.
-///
-/// # Arguments
-///
-/// * `direction` - The direction (e.g., `West`, `East`, `First`, `Last`, `North`, `South`).
-/// * `current_window_id` - The `Entity` of the current window.
-/// * `strip` - A reference to the `LayoutStrip` to search within.
-///
-/// # Returns
-///
-/// `Some(Entity)` with the found window's entity, otherwise `None`.
 #[instrument(level = Level::DEBUG, ret)]
 fn get_window_in_direction(
     direction: &Direction,
     entity: Entity,
     strip: &LayoutStrip,
 ) -> Option<Entity> {
-    let index = strip.index_of(entity).ok()?;
-
-    match direction {
-        Direction::West => strip.left_neighbour(entity),
-        Direction::East => strip.right_neighbour(entity),
-
-        Direction::First => strip.first().ok().and_then(|column| column.top()),
-
-        Direction::Last => strip.last().ok().and_then(|column| column.top()),
-
-        Direction::North => match strip.get(index).ok()? {
-            Column::Single(_) => None,
-            Column::Stack(stack) => stack
-                .iter()
-                .enumerate()
-                .find(|(_, window_id)| entity == **window_id)
-                .and_then(|(index, _)| (index > 0).then(|| stack.get(index - 1)).flatten())
-                .copied(),
-        },
-
-        Direction::South => match strip.get(index).ok()? {
-            Column::Single(_) => None,
-            Column::Stack(stack) => stack
-                .iter()
-                .enumerate()
-                .find(|(_, window_id)| entity == **window_id)
-                .and_then(|(index, _)| {
-                    (index < stack.len() - 1)
-                        .then(|| stack.get(index + 1))
-                        .flatten()
-                })
-                .copied(),
-        },
-    }
+    navigation::window_in_direction(direction, entity, strip)
 }
 
 /// Handles the "focus" command, moving focus to a window in a specified direction.
