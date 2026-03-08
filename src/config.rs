@@ -29,16 +29,16 @@ use crate::{
 use crate::{platform::CFStringRef, util::AXUIWrapper};
 
 /// A `LazyLock` that determines the path to the application's configuration file.
-/// It checks the `KARAKURI_CONFIG` environment variable first, then standard XDG locations and user home directory.
+/// It checks the `AYATSURI_CONFIG` environment variable first, then standard XDG locations and user home directory.
 /// If no configuration file is found, the application will panic.
 pub static CONFIGURATION_FILE: LazyLock<PathBuf> = LazyLock::new(|| {
-    if let Ok(path_str) = env::var("KARAKURI_CONFIG") {
+    if let Ok(path_str) = env::var("AYATSURI_CONFIG") {
         let path = PathBuf::from(path_str);
         if path.exists() {
             return path;
         }
         warn!(
-            "{}: $KARAKURI_CONFIG is set to {}, but the file does not exist. Falling back to default locations.",
+            "{}: $AYATSURI_CONFIG is set to {}, but the file does not exist. Falling back to default locations.",
             function_name!(),
             path.display()
         );
@@ -48,26 +48,26 @@ pub static CONFIGURATION_FILE: LazyLock<PathBuf> = LazyLock::new(|| {
         // YAML (preferred format)
         env::var("XDG_CONFIG_HOME")
             .ok()
-            .map(|x| PathBuf::from(x).join("karakuri/karakuri.yaml")),
+            .map(|x| PathBuf::from(x).join("ayatsuri/ayatsuri.yaml")),
         env::var("XDG_CONFIG_HOME")
             .ok()
-            .map(|x| PathBuf::from(x).join("karakuri/karakuri.yml")),
+            .map(|x| PathBuf::from(x).join("ayatsuri/ayatsuri.yml")),
         env::var("HOME")
             .ok()
-            .map(|h| PathBuf::from(h).join(".config/karakuri/karakuri.yaml")),
+            .map(|h| PathBuf::from(h).join(".config/ayatsuri/ayatsuri.yaml")),
         env::var("HOME")
             .ok()
-            .map(|h| PathBuf::from(h).join(".config/karakuri/karakuri.yml")),
+            .map(|h| PathBuf::from(h).join(".config/ayatsuri/ayatsuri.yml")),
         // TOML (backwards compatible)
         env::var("HOME")
             .ok()
-            .map(|h| PathBuf::from(h).join(".karakuri")),
+            .map(|h| PathBuf::from(h).join(".ayatsuri")),
         env::var("HOME")
             .ok()
-            .map(|h| PathBuf::from(h).join(".karakuri.toml")),
+            .map(|h| PathBuf::from(h).join(".ayatsuri.toml")),
         env::var("XDG_CONFIG_HOME")
             .ok()
-            .map(|x| PathBuf::from(x).join("karakuri/karakuri.toml")),
+            .map(|x| PathBuf::from(x).join("ayatsuri/ayatsuri.toml")),
     ];
 
     standard_paths
@@ -76,7 +76,7 @@ pub static CONFIGURATION_FILE: LazyLock<PathBuf> = LazyLock::new(|| {
         .find(|path| path.exists())
         .unwrap_or_else(|| {
             panic!(
-                "{}: Configuration file not found. Tried: $KARAKURI_CONFIG, $HOME/.karakuri, $HOME/.karakuri.toml, $XDG_CONFIG_HOME/karakuri/karakuri.toml",
+                "{}: Configuration file not found. Tried: $AYATSURI_CONFIG, $HOME/.ayatsuri, $HOME/.ayatsuri.toml, $XDG_CONFIG_HOME/ayatsuri/ayatsuri.toml",
                 function_name!()
             )
         })
@@ -622,7 +622,7 @@ pub enum DefaultsValue {
 /// Configuration for the Rhai scripting engine.
 #[derive(Deserialize, Clone, Debug, Default)]
 pub struct ScriptingConfig {
-    /// Path to the init script (e.g., `~/.config/karakuri/init.rhai`).
+    /// Path to the init script (e.g., `~/.config/ayatsuri/init.rhai`).
     pub init_script: Option<String>,
     /// Directories to scan for additional .rhai scripts.
     #[serde(default)]
@@ -636,7 +636,7 @@ impl InnerConfig {
     /// defaults (serde) → environment variables → config file (TOML or YAML).
     fn from_figment(path: &Path) -> Result<InnerConfig> {
         let mut figment = Figment::new()
-            .merge(Env::prefixed("KARAKURI_").split("__"));
+            .merge(Env::prefixed("AYATSURI_").split("__"));
 
         // Layer the config file on top (highest priority per the figment pattern).
         match path.extension().and_then(|e| e.to_str()) {
@@ -841,7 +841,7 @@ pub struct MainOptions {
     pub swipe_deceleration: Option<f64>,
 
     /// Path to a wallpaper image applied on startup. Supports ~ expansion.
-    /// When set, karakuri sets the desktop wallpaper on all screens at launch.
+    /// When set, ayatsuri sets the desktop wallpaper on all screens at launch.
     pub wallpaper: Option<String>,
 
     /// Edge snapping configuration for floating mode.

@@ -1,4 +1,4 @@
-//! Centralized state management for the Karakuri window manager.
+//! Centralized state management for the Ayatsuri window manager.
 //!
 //! Uses Bevy's `States` system for global mode transitions and typed context
 //! resources for associated data. This replaces scattered flag resources with

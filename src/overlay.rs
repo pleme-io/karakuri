@@ -81,7 +81,7 @@ struct DimViewIvars {
 define_class!(
     #[unsafe(super(NSView))]
     #[thread_kind = MainThreadOnly]
-    #[name = "KarakuriDimView"]
+    #[name = "AyatsuriDimView"]
     #[ivars = DimViewIvars]
     #[derive(Debug)]
     struct DimView;
@@ -248,7 +248,7 @@ struct SnapPreviewIvars {
 define_class!(
     #[unsafe(super(NSView))]
     #[thread_kind = MainThreadOnly]
-    #[name = "KarakuriSnapPreviewView"]
+    #[name = "AyatsuriSnapPreviewView"]
     #[ivars = SnapPreviewIvars]
     #[derive(Debug)]
     struct SnapPreviewView;

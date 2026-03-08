@@ -8,7 +8,7 @@ use tracing::{info, warn};
 use engine::ScriptEngine;
 
 /// Plugin that provides Rhai scripting support.
-/// Loads `~/.config/karakuri/init.rhai` and `~/.config/karakuri/scripts/*.rhai` on startup.
+/// Loads `~/.config/ayatsuri/init.rhai` and `~/.config/ayatsuri/scripts/*.rhai` on startup.
 pub struct ScriptingPlugin;
 
 impl ScriptingPlugin {

@@ -6,7 +6,7 @@ use tracing::{error, info, warn};
 
 use super::engine::ScriptEngine;
 
-/// Discover the script directories for Karakuri.
+/// Discover the script directories for Ayatsuri.
 /// Returns (init_script_path, script_dirs).
 pub fn discover_script_paths() -> (Option<PathBuf>, Vec<PathBuf>) {
     let config_dir = env::var("XDG_CONFIG_HOME")
@@ -16,7 +16,7 @@ pub fn discover_script_paths() -> (Option<PathBuf>, Vec<PathBuf>) {
                 .map(|h| PathBuf::from(h).join(".config"))
                 .unwrap_or_default()
         })
-        .join("karakuri");
+        .join("ayatsuri");
 
     let init_script = config_dir.join("init.rhai");
     let script_dir = config_dir.join("scripts");

@@ -31,48 +31,48 @@ use reader::CommandReader;
 
 use crate::ecs::setup_bevy_app;
 
-/// `Karakuri` is the main command-line interface structure for the automation framework.
-/// It defines the available subcommands for controlling the Karakuri daemon.
+/// `Ayatsuri` is the main command-line interface structure for the automation framework.
+/// It defines the available subcommands for controlling the Ayatsuri daemon.
 #[derive(Clone, Debug, Default, Parser)]
 #[command(
     version = clap::crate_version!(),
     author = clap::crate_authors!(),
     about = clap::crate_description!(),
 )]
-pub struct Karakuri {
+pub struct Ayatsuri {
     /// The subcommand to execute (e.g., `launch`, `install`, `send-cmd`).
     #[clap(subcommand)]
     subcmd: Option<SubCmd>,
 }
 
-/// `SubCmd` enumerates the available command-line subcommands for `karakuri`.
+/// `SubCmd` enumerates the available command-line subcommands for `ayatsuri`.
 /// These subcommands allow users to launch the daemon, install/uninstall it as a service,
 /// start/stop/restart the service, or send commands to a running daemon.
 #[derive(Clone, Debug, Default, Subcommand)]
 pub enum SubCmd {
-    /// Launches the `karakuri` daemon directly in the console (default behavior).
+    /// Launches the `ayatsuri` daemon directly in the console (default behavior).
     #[default]
     Launch,
 
-    /// Installs the `karakuri` daemon as a background service.
+    /// Installs the `ayatsuri` daemon as a background service.
     Install,
 
-    /// Uninstalls the `karakuri` background service.
+    /// Uninstalls the `ayatsuri` background service.
     Uninstall,
 
-    /// Reinstalls the `karakuri` background service.
+    /// Reinstalls the `ayatsuri` background service.
     Reinstall,
 
-    /// Starts the `karakuri` background service.
+    /// Starts the `ayatsuri` background service.
     Start,
 
-    /// Stops the `karakuri` background service.
+    /// Stops the `ayatsuri` background service.
     Stop,
 
-    /// Restarts the `karakuri` background service.
+    /// Restarts the `ayatsuri` background service.
     Restart,
 
-    /// Sends a command via a Unix socket to the running `karakuri` daemon.
+    /// Sends a command via a Unix socket to the running `ayatsuri` daemon.
     SendCmd {
         #[arg(trailing_var_arg = true)]
         cmd: Vec<String>,
@@ -82,7 +82,7 @@ pub enum SubCmd {
     Mcp,
 }
 
-/// The main entry point of the `karakuri` application.
+/// The main entry point of the `ayatsuri` application.
 /// It sets up logging and dispatches commands accordingly.
 ///
 /// # Returns
@@ -105,7 +105,7 @@ fn main() -> Result<()> {
 
     let service = || service::Service::try_new(service::ID);
 
-    match Karakuri::parse().subcmd.unwrap_or_default() {
+    match Ayatsuri::parse().subcmd.unwrap_or_default() {
         SubCmd::Launch => {
             let (sender, receiver) = EventSender::new();
             match setup_bevy_app(sender.clone(), receiver) {
@@ -115,7 +115,7 @@ fn main() -> Result<()> {
                 }
                 Err(errors::Error::PermissionDenied(msg)) => {
                     eprintln!("Permission denied: {msg}");
-                    eprintln!("Grant accessibility access in System Settings → Privacy & Security → Accessibility, then restart karakuri.");
+                    eprintln!("Grant accessibility access in System Settings → Privacy & Security → Accessibility, then restart ayatsuri.");
                     // Exit 0 so launchd KeepAlive doesn't restart in a loop.
                     return Ok(());
                 }

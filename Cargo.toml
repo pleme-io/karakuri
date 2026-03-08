@@ -1,9 +1,9 @@
 [package]
-name = "karakuri"
+name = "ayatsuri"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.89.0"
-description = "Karakuri — programmable macOS automation framework"
+description = "Ayatsuri — programmable macOS automation framework"
 homepage = "https://github.com/pleme-io/karakuri"
 repository = "https://github.com/pleme-io/karakuri"
 readme = "README.md"

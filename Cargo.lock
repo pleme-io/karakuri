@@ -303,6 +303,41 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c08606f8c3cbf4ce6ec8e28fb0014a2c086708fe954eaa885384a6165172e7e8"
 
 [[package]]
+name = "ayatsuri"
+version = "0.1.0"
+dependencies = [
+ "accessibility-sys",
+ "arc-swap",
+ "bevy",
+ "bitflags 2.11.0",
+ "chrono",
+ "clap",
+ "derive_more",
+ "embed_plist",
+ "figment",
+ "launchctl",
+ "libc",
+ "notify",
+ "objc2",
+ "objc2-app-kit",
+ "objc2-core-foundation",
+ "objc2-core-graphics",
+ "objc2-foundation",
+ "regex",
+ "rhai",
+ "rmcp",
+ "schemars 0.8.22",
+ "scopeguard",
+ "serde",
+ "serde_json",
+ "stdext",
+ "tokio",
+ "toml 1.0.3+spec-1.1.0",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "base64"
 version = "0.22.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2097,41 +2132,6 @@ checksum = "14dc6f6450b3f6d4ed5b16327f38fed626d375a886159ca555bd7822c0c3a5a6"
 dependencies = [
  "once_cell",
  "wasm-bindgen",
-]
-
-[[package]]
-name = "karakuri"
-version = "0.1.0"
-dependencies = [
- "accessibility-sys",
- "arc-swap",
- "bevy",
- "bitflags 2.11.0",
- "chrono",
- "clap",
- "derive_more",
- "embed_plist",
- "figment",
- "launchctl",
- "libc",
- "notify",
- "objc2",
- "objc2-app-kit",
- "objc2-core-foundation",
- "objc2-core-graphics",
- "objc2-foundation",
- "regex",
- "rhai",
- "rmcp",
- "schemars 0.8.22",
- "scopeguard",
- "serde",
- "serde_json",
- "stdext",
- "tokio",
- "toml 1.0.3+spec-1.1.0",
- "tracing",
- "tracing-subscriber",
 ]
 
 [[package]]

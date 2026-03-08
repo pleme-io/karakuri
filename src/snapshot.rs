@@ -1,6 +1,6 @@
 use serde::Serialize;
 
-/// Complete snapshot of karakuri's ECS state, suitable for JSON serialization.
+/// Complete snapshot of ayatsuri's ECS state, suitable for JSON serialization.
 /// Built every Bevy tick and shared with the socket reader thread via `ArcSwap`.
 #[derive(Serialize, Clone, Default)]
 pub struct StateSnapshot {

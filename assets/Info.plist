@@ -3,7 +3,7 @@
 <plist version="1.0">
   <dict>
     <key>CFBundleIdentifier</key>
-    <string>io.pleme.karakuri</string>
+    <string>io.pleme.ayatsuri</string>
     <key>CFBundleShortVersionString</key>
     <string>0.1.0</string>
     <key>CFBundlePackageType</key>

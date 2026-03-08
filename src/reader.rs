@@ -14,7 +14,7 @@ use crate::snapshot::StateSnapshot;
 const QUERY_PREFIX: &[u8] = b"query\0";
 
 /// `CommandReader` is responsible for sending and receiving commands via a Unix socket.
-/// It acts as an IPC mechanism for the `karakuri` application, allowing external processes
+/// It acts as an IPC mechanism for the `ayatsuri` application, allowing external processes
 /// or the CLI client to communicate with the running daemon.
 pub struct CommandReader {
     events: EventSender,
@@ -23,9 +23,9 @@ pub struct CommandReader {
 
 impl CommandReader {
     /// The path to the Unix socket used for inter-process communication.
-    const SOCKET_PATH: &str = "/tmp/karakuri.socket";
+    const SOCKET_PATH: &str = "/tmp/ayatsuri.socket";
 
-    /// Sends a command and its arguments to the running `karakuri` application via a Unix socket.
+    /// Sends a command and its arguments to the running `ayatsuri` application via a Unix socket.
     /// The arguments are serialized and sent as a byte stream.
     pub fn send_command(params: impl IntoIterator<Item = String>) -> Result<()> {
         let output = params

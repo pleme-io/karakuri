@@ -795,7 +795,7 @@ pub fn check_ax_privilege() -> bool {
 }
 
 /// Checks if the macOS "Displays have separate Spaces" option is enabled.
-/// This is crucial for the window manager's functionality, as Karakuri relies on independent spaces per display.
+/// This is crucial for the window manager's functionality, as Ayatsuri relies on independent spaces per display.
 ///
 /// # Returns
 ///

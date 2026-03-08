@@ -1,5 +1,5 @@
 {
-  description = "Karakuri — programmable macOS automation framework";
+  description = "Ayatsuri — programmable macOS automation framework";
 
   inputs = {
     nixpkgs.url = "github:nixos/nixpkgs?ref=nixos-unstable";
@@ -40,7 +40,7 @@
         + "_"
         + (self.shortRev or "dirty");
 
-      pname = "karakuri";
+      pname = "ayatsuri";
 
       package = pkgs.rustPlatform.buildRustPackage {
         inherit pname version;
@@ -65,12 +65,12 @@
     in
     {
       packages.${system} = {
-        karakuri = package;
+        ayatsuri = package;
         default = package;
       };
 
       overlays.default = final: prev: {
-        karakuri = self.packages.${final.system}.default;
+        ayatsuri = self.packages.${final.system}.default;
       };
 
       homeManagerModules.default = import ./module {

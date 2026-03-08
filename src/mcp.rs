@@ -1,4 +1,4 @@
-//! MCP server for live karakuri state inspection.
+//! MCP server for live ayatsuri state inspection.
 //!
 //! Tools:
 //!   `get_state`    — full ECS state snapshot (displays, workspaces, windows, config)
@@ -31,12 +31,12 @@ struct SendCommandInput {
 // ── MCP Server ──────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone)]
-struct KarakuriMcp {
+struct AyatsuriMcp {
     tool_router: ToolRouter<Self>,
 }
 
 #[tool_router]
-impl KarakuriMcp {
+impl AyatsuriMcp {
     fn new() -> Self {
         Self {
             tool_router: Self::tool_router(),
@@ -44,7 +44,7 @@ impl KarakuriMcp {
     }
 
     #[tool(
-        description = "Get full karakuri state: displays, workspaces, windows, config flags. Returns JSON."
+        description = "Get full ayatsuri state: displays, workspaces, windows, config flags. Returns JSON."
     )]
     async fn get_state(&self) -> String {
         query_daemon("state")
@@ -70,7 +70,7 @@ impl KarakuriMcp {
     }
 
     #[tool(
-        description = "Send a command to the running karakuri daemon (e.g. 'focus east', 'swap west', 'center', 'cycle')"
+        description = "Send a command to the running ayatsuri daemon (e.g. 'focus east', 'swap west', 'center', 'cycle')"
     )]
     async fn send_command(&self, Parameters(input): Parameters<SendCommandInput>) -> String {
         let words: Vec<String> = input.command.split_whitespace().map(String::from).collect();
@@ -82,11 +82,11 @@ impl KarakuriMcp {
 }
 
 #[tool_handler]
-impl ServerHandler for KarakuriMcp {
+impl ServerHandler for AyatsuriMcp {
     fn get_info(&self) -> ServerInfo {
         ServerInfo {
             instructions: Some(
-                "Karakuri window manager — live ECS state inspection and command dispatch.".into(),
+                "Ayatsuri window manager — live ECS state inspection and command dispatch.".into(),
             ),
             capabilities: ServerCapabilities::builder().enable_tools().build(),
             ..Default::default()
@@ -98,13 +98,13 @@ fn query_daemon(query: &str) -> String {
     match CommandReader::send_query(query) {
         Ok(json) => json,
         Err(e) => format!(
-            r#"{{"error":"Failed to connect to karakuri daemon: {e}"}}"#
+            r#"{{"error":"Failed to connect to ayatsuri daemon: {e}"}}"#
         ),
     }
 }
 
 pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
-    let server = KarakuriMcp::new().serve(stdio()).await?;
+    let server = AyatsuriMcp::new().serve(stdio()).await?;
     server.waiting().await?;
     Ok(())
 }
