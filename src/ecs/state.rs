@@ -50,6 +50,7 @@ pub enum InteractionMode {
 
 /// How the current focus was acquired. Determines reshuffle and warp behavior.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)] // System variant — set by app lifecycle triggers (app launch, space change).
 pub enum FocusSource {
     /// Focus changed via keyboard navigation. Reshuffle + warp cursor.
     Keyboard,
@@ -95,6 +96,7 @@ pub struct DragContext {
     /// The snap zone the cursor is currently in, if any.
     pub snap_zone: Option<SnapZone>,
     /// The display the snap zone belongs to (may differ during cross-display drags).
+    #[allow(dead_code)] // Written during drag; read by cross-display snap rendering.
     pub snap_display: Option<CGDirectDisplayID>,
 }
 
@@ -125,32 +127,43 @@ impl SwipeContext {
 #[derive(Resource, Debug, Default)]
 pub struct FullscreenSpace(pub bool);
 
+/// Default settle frames if no config is available.
+#[allow(dead_code)]
+const DEFAULT_SETTLE_FRAMES: u32 = 2;
+
 /// Debounce gate for reload-triggered reshuffles.
 ///
 /// When present, cascading reshuffles are suppressed and animations use
 /// instant-snap instead of interpolation. The guard captures pre-reload
 /// window positions so that unchanged windows emit no movement markers.
-const SETTLE_FRAMES: u32 = 2;
-
 #[derive(Resource, Debug)]
 pub struct ReloadGuard {
     /// Frames remaining before the consolidated reshuffle fires.
     pub settle_frames: u32,
+    /// The configured settle value (for bump resets).
+    settle_value: u32,
     /// Window positions captured at the moment the guard was inserted.
     pub pre_positions: HashMap<Entity, IRect>,
 }
 
 impl ReloadGuard {
+    #[allow(dead_code)]
     pub fn new(pre_positions: HashMap<Entity, IRect>) -> Self {
+        Self::with_settle_frames(pre_positions, DEFAULT_SETTLE_FRAMES)
+    }
+
+    pub fn with_settle_frames(pre_positions: HashMap<Entity, IRect>, settle: u32) -> Self {
+        let settle = settle.max(1);
         Self {
-            settle_frames: SETTLE_FRAMES,
+            settle_frames: settle,
+            settle_value: settle,
             pre_positions,
         }
     }
 
     /// Reset the settle counter (called by cascading triggers).
     pub fn bump(&mut self) {
-        self.settle_frames = SETTLE_FRAMES;
+        self.settle_frames = self.settle_value;
     }
 
     /// Whether the guard has settled (ready for consolidated reshuffle).

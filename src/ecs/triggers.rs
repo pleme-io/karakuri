@@ -17,7 +17,7 @@ use tracing::{Level, debug, error, info, instrument, trace, warn};
 
 use super::{
     ActiveDisplayMarker, BProcess, FocusedMarker, FreshMarker,
-    NativeFullscreenMarker, SnapZone, SpawnWindowTrigger, SpringState, StrayFocusEvent,
+    NativeFullscreenMarker, SpawnWindowTrigger, SpringState, StrayFocusEvent,
     Timeout, Unmanaged, WMEventTrigger, WindowDraggedMarker,
 };
 use crate::ecs::state::{FullscreenSpace, ReloadGuard};
@@ -287,6 +287,7 @@ pub(crate) fn workspace_change_trigger(
     windows: Windows,
     fs_query: Query<&NativeFullscreenMarker>,
     window_manager: Res<WindowManager>,
+    config: Res<Config>,
     mut fs_space: ResMut<FullscreenSpace>,
     reload_guard: Option<ResMut<ReloadGuard>>,
     mut commands: Commands,
@@ -303,7 +304,7 @@ pub(crate) fn workspace_change_trigger(
             .iter()
             .map(|(w, e)| (e, w.frame()))
             .collect();
-        commands.insert_resource(ReloadGuard::new(pre_positions));
+        commands.insert_resource(ReloadGuard::with_settle_frames(pre_positions, config.settle_frames()));
     }
 
     let Ok(workspace_id) = window_manager.active_display_space(active_display.id()) else {
@@ -1356,7 +1357,7 @@ pub(crate) fn refresh_configuration_trigger(
                 .iter()
                 .map(|(w, e)| (e, w.frame()))
                 .collect();
-            commands.insert_resource(ReloadGuard::new(pre_positions));
+            commands.insert_resource(ReloadGuard::with_settle_frames(pre_positions, config.settle_frames()));
         }
         if let Some((_, entity)) = windows.focused() {
             reshuffle_around(entity, &mut commands);

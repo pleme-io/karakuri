@@ -390,9 +390,9 @@ impl ProcessHandler {
         if let Some(this) = NonNull::new(this.cast_mut())
             .map(|this| unsafe { this.cast::<ProcessHandler>().as_mut() })
         {
-            const PARAM: &str = "psn "; // kEventParamProcessID and typeProcessSerialNumber
-            let param_name = u32::from_be_bytes(PARAM.as_bytes().try_into().unwrap());
-            let param_type = param_name; // Uses the same FourCharCode as param_name
+            // kEventParamProcessID and typeProcessSerialNumber — FourCC "psn "
+            let param_name = u32::from_be_bytes(*b"psn ");
+            let param_type = param_name;
 
             let mut psn = ProcessSerialNumber::default();
 
@@ -402,9 +402,7 @@ impl ProcessHandler {
                     param_name,
                     param_type,
                     std::ptr::null_mut(),
-                    std::mem::size_of::<ProcessSerialNumber>()
-                        .try_into()
-                        .unwrap(),
+                    std::mem::size_of::<ProcessSerialNumber>() as u32,
                     std::ptr::null_mut(),
                     NonNull::from(&mut psn).as_ptr().cast(),
                 )

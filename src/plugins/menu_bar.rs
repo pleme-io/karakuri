@@ -4,6 +4,7 @@ use tracing::info;
 
 /// Message for menu bar item clicks.
 #[derive(Clone, Debug, Message)]
+#[allow(dead_code)] // Fields consumed by menu bar click observer.
 pub struct MenuBarItemClicked {
     pub item_id: String,
 }

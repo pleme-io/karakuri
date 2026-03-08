@@ -36,6 +36,7 @@ pub struct Configuration<'w> {
     app_phase: Res<'w, State<AppPhase>>,
 }
 
+#[allow(dead_code)] // Accessors for features being wired up (FFM, gestures, edge padding).
 impl Configuration<'_> {
     pub fn focus_follows_mouse(&self) -> bool {
         self.config
@@ -105,6 +106,7 @@ pub struct ConfigurationMut<'w> {
     app_phase: Res<'w, State<AppPhase>>,
 }
 
+#[allow(dead_code)]
 impl ConfigurationMut<'_> {
     pub fn focus_follows_mouse(&self) -> bool {
         self.config

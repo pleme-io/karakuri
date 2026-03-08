@@ -1,3 +1,11 @@
+mod animation;
+mod overlay;
+
+pub(crate) use animation::{animate_resize_windows, animate_windows};
+pub(crate) use overlay::{
+    hide_overlays_on_mode_change, swipe_cleanup_drag_markers, update_overlays, update_snap_preview,
+};
+
 use bevy::app::AppExit;
 use bevy::ecs::change_detection::DetectChanges;
 use bevy::ecs::entity::Entity;
@@ -5,7 +13,7 @@ use bevy::ecs::hierarchy::{ChildOf, Children};
 use bevy::ecs::message::{MessageReader, MessageWriter};
 use bevy::ecs::query::{Has, Or, With, Without};
 use bevy::ecs::system::{Commands, Local, NonSend, NonSendMut, Populated, Query, Res, ResMut, Single};
-use bevy::math::IRect;
+use bevy::math::{IRect, IVec2};
 use bevy::tasks::AsyncComputeTaskPool;
 use bevy::tasks::futures_lite::future;
 use bevy::time::{Time, Timer, TimerMode};
@@ -18,7 +26,7 @@ use tracing::{Level, debug, error, info, instrument, trace, warn};
 
 use super::{
     ActiveDisplayMarker, BProcess, ExistingMarker, FocusedMarker, FreshMarker,
-    PollForNotifications, RepositionMarker, ResizeMarker, SpawnWindowTrigger, SpringState,
+    PollForNotifications, RepositionMarker, ResizeMarker, SpawnWindowTrigger,
     Timeout, WMEventTrigger,
 };
 use crate::config::{Config, SwipeGestureDirection};
@@ -27,7 +35,7 @@ use crate::ecs::{
     ActiveWorkspaceMarker, BruteforceWindows, DockPosition, LocateDockTrigger,
     ReshuffleAroundMarker, StackAdjustedResize, StartupAppLaunch, Unmanaged,
     WindowDraggedMarker, WindowSwipeMarker, reposition_entity, reshuffle_around, resize_entity,
-    state::{AppPhase, DragContext, InteractionMode, ReloadGuard, SwipeContext},
+    state::{AppPhase, InteractionMode, ReloadGuard, SwipeContext},
 };
 use crate::events::Event;
 use crate::logic::swipe as swipe_logic;
@@ -35,7 +43,6 @@ use crate::manager::{
     Application, Column, Display, LayoutStrip, Origin, Process, Size, Window, WindowManager,
     WindowOS, bruteforce_windows,
 };
-use crate::overlay::OverlayManager;
 use crate::platform::{PlatformCallbacks, WorkspaceId};
 
 /// Processes a single incoming `Event`. It dispatches various event types to the `WindowManager` or other internal handlers.
@@ -678,142 +685,7 @@ pub(crate) fn workspace_change_watcher(
     }
 }
 
-/// Animates window movement.
-/// This is a Bevy system that runs on `Update`. It smoothly moves windows to their target
-/// positions, as indicated by the `RepositionMarker` component.
-/// Animation speed is controlled by the `animation_speed` in the `Config`.
-/// When a window reaches its target position, the `RepositionMarker` is removed.
-///
-/// # Arguments
-///
-/// * `windows` - A `Populated` query for `(&mut Window, Entity, &RepositionMarker)` components.
-/// * `displays` - A query for all `Display` entities, used to get display bounds and menubar height.
-/// * `time` - The Bevy `Time` resource for calculating delta time.
-/// * `config` - The `Config` resource, used for animation speed.
-/// * `commands` - Bevy commands to remove the `RepositionMarker` when animation is complete.
-#[allow(clippy::needless_pass_by_value)]
-#[instrument(level = Level::TRACE, skip_all)]
-pub(crate) fn animate_windows(
-    windows: Populated<(&mut Window, Entity, &RepositionMarker, Option<&mut SpringState>)>,
-    swipe_tracker: SmoothSwipeTracking,
-    reload_guard: Option<Res<ReloadGuard>>,
-    time: Res<Time>,
-    mut commands: Commands,
-) {
-    use crate::logic::spring::{self, SpringParams};
-
-    let dt = time.delta_secs_f64();
-    let instant_snap = swipe_tracker.sliding() || reload_guard.is_some();
-    let params = SpringParams::default(); // stiffness=800, damping=1.0
-
-    for (mut window, entity, RepositionMarker { origin, display_id: _ }, spring) in windows {
-        if instant_snap {
-            window.reposition(*origin);
-            if let Some(mut s) = spring {
-                s.pos_x.velocity = 0.0;
-                s.pos_y.velocity = 0.0;
-            }
-            commands.entity(entity).try_remove::<RepositionMarker>();
-            continue;
-        }
-
-        let cur = window.frame().min;
-        if let Some(mut s) = spring {
-            let (nx, sx) = spring::step(f64::from(cur.x), f64::from(origin.x), &mut s.pos_x, &params, dt);
-            let (ny, sy) = spring::step(f64::from(cur.y), f64::from(origin.y), &mut s.pos_y, &params, dt);
-            let delta = Origin::new(nx.round() as i32, ny.round() as i32);
-
-            trace!(
-                "window {} source {} dest {origin} spring → {delta}",
-                window.id(), cur,
-            );
-            window.reposition(delta);
-            if sx && sy {
-                commands.entity(entity).try_remove::<RepositionMarker>();
-            }
-        } else {
-            // No spring state — snap instantly (e.g. test environment).
-            window.reposition(*origin);
-            commands.entity(entity).try_remove::<RepositionMarker>();
-        }
-    }
-}
-
-/// Animates window resizing.
-/// This is a Bevy system that runs on `Update`. It resizes windows to their target
-/// dimensions, as indicated by the `ResizeMarker` component.
-/// When a window reaches its target size, the `ResizeMarker` is removed.
-///
-/// # Arguments
-///
-/// * `windows` - A `Populated` query for `(&mut Window, Entity, &ResizeMarker)` components.
-/// * `active_display` - An `ActiveDisplay` system parameter providing immutable access to the active display.
-/// * `commands` - Bevy commands to remove the `ResizeMarker` when resizing is complete.
-#[allow(clippy::needless_pass_by_value)]
-#[instrument(level = Level::TRACE, skip_all)]
-pub(crate) fn animate_resize_windows(
-    windows: Populated<(
-        &mut Window,
-        Entity,
-        &ResizeMarker,
-        Has<RepositionMarker>,
-        Option<&mut SpringState>,
-    )>,
-    displays: Query<&Display>,
-    reload_guard: Option<Res<ReloadGuard>>,
-    time: Res<Time>,
-    mut commands: Commands,
-) {
-    use crate::logic::spring::{self, SpringParams};
-
-    let dt = time.delta_secs_f64();
-    let instant_snap = reload_guard.is_some();
-    let params = SpringParams::default();
-
-    for (mut window, entity, ResizeMarker { size, display_id }, moving, spring) in windows {
-        if instant_snap {
-            let Some(display) = displays.iter().find(|d| d.id() == *display_id) else {
-                continue;
-            };
-            if let Some(mut s) = spring {
-                s.size_x.velocity = 0.0;
-                s.size_y.velocity = 0.0;
-            }
-            window.resize(*size, display.width());
-            commands.entity(entity).try_remove::<ResizeMarker>();
-            continue;
-        }
-
-        if moving {
-            let current_size = window.frame().size();
-            if size.x > current_size.x || size.y > current_size.y {
-                continue;
-            }
-        }
-        let Some(display) = displays.iter().find(|display| display.id() == *display_id) else {
-            continue;
-        };
-
-        let cur = window.frame().size();
-        if let Some(mut s) = spring {
-            let (nw, sw) = spring::step(f64::from(cur.x), f64::from(size.x), &mut s.size_x, &params, dt);
-            let (nh, sh) = spring::step(f64::from(cur.y), f64::from(size.y), &mut s.size_y, &params, dt);
-            let delta = Size::new(nw.round() as i32, nh.round() as i32);
-
-            trace!(
-                "window {} source {cur} dest {size} spring → {delta}",
-                window.id(),
-            );
-            window.resize(delta, display.width());
-            if sw && sh {
-                commands.entity(entity).try_remove::<ResizeMarker>();
-            }
-        } else {
-            window.resize(*size, display.width());
-            commands.entity(entity).try_remove::<ResizeMarker>();
-        }
-    }
-}
+// Animation systems: see systems/animation.rs
 
 #[allow(clippy::needless_pass_by_value, clippy::too_many_arguments)]
 pub(crate) fn window_swiper(
@@ -1541,7 +1413,7 @@ fn get_display_height(active_display: &ActiveDisplay) -> i32 {
     active_display.bounds().height() - dock_size
 }
 
-#[allow(clippy::cast_possible_truncation, clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments)]
 fn position_layout_windows<W, P>(
     viewport_offset: i32,
     active_display: &ActiveDisplay,
@@ -1555,125 +1427,83 @@ fn position_layout_windows<W, P>(
     W: Fn(Entity) -> Option<IRect>,
     P: Fn(Entity) -> i32,
 {
+    use crate::logic::layout::{
+        DisplayGeometry, FrameUpdate, LayoutPadding, SliverConfig, WindowInfo,
+        compute_final_frames,
+    };
+
     let menubar_height = active_display.display().menubar_height();
+    let display_height = get_display_height(active_display);
+    let (pad_top, pad_right, pad_bottom, pad_left) = config.edge_padding();
+
+    // Shrink the layout viewport by global edge padding.
     let bounds = IRect::new(
         0,
         0,
-        active_display.bounds().width(),
-        get_display_height(active_display),
+        active_display.bounds().width() - pad_left - pad_right,
+        display_height - pad_top - pad_bottom,
     );
-
-    // Shrink the layout viewport by global edge padding.
-    // calculate_layout only uses viewport.size (not origin), so we apply
-    // the origin offset to each frame after layout. We also adjust
-    // viewport_offset by pad_left because the caller computes it from
-    // current window positions (which already include pad_left from a
-    // previous layout pass).
-    let (pad_top, pad_right, pad_bottom, pad_left) = config.edge_padding();
-    let mut bounds = bounds;
-    bounds.max.x -= pad_left + pad_right;
-    bounds.max.y -= pad_top + pad_bottom;
     let viewport_offset = viewport_offset + pad_left;
 
-    let display_width = active_display.bounds().width();
-    let padded_right = display_width - pad_right;
     let layout_strip = active_display.active_strip();
-    for (entity, frame) in layout_strip.calculate_layout(
-        viewport_offset,
-        &bounds,
-        config.sliver_width(),
-        &get_window_frame,
-    ) {
-        let Some(old_frame) = get_window_frame(entity) else {
-            continue;
-        };
-        let mut frame = IRect::from_corners(
-            active_display.display().absolute_coords(frame.min),
-            active_display.display().absolute_coords(frame.max),
-        );
 
-        // Apply horizontal edge padding offset. calculate_layout returns
-        // positions relative to 0, so shift visible windows by pad_left.
-        frame.min.x += pad_left;
-        frame.max.x += pad_left;
+    // Collect layout results with window info for the pure computation.
+    let window_infos: Vec<_> = layout_strip
+        .calculate_layout(viewport_offset, &bounds, config.sliver_width(), get_window_frame)
+        .filter_map(|(entity, frame)| {
+            let old_frame = get_window_frame(entity)?;
+            let is_stacked = layout_strip
+                .index_of(entity)
+                .ok()
+                .and_then(|idx| layout_strip.get(idx).ok())
+                .is_some_and(|col| matches!(col, Column::Stack(_)));
 
-        // A window is a "sliver" if it has very little visible area within
-        // the padded viewport. Only push truly off-screen windows to show
-        // config.sliver_width() pixels from the screen edge.
-        let sliver_width = config.sliver_width();
-        let visible_left = frame.min.x.max(pad_left);
-        let visible_right = frame.max.x.min(padded_right);
-        let visible = (visible_right - visible_left).max(0);
-        let is_off_screen = visible <= sliver_width.max(20);
-
-        if is_off_screen {
-            // Account for per-window horizontal_padding: reposition() adds
-            // h_pad to the virtual x, so subtract it here so the OS window
-            // lands exactly sliver_width pixels from the screen edge.
-            let h_pad = get_window_h_pad(entity);
-            let width = frame.width();
-            let window_center = frame.center().x;
-            if window_center <= pad_left {
-                frame.min.x = sliver_width + h_pad - width;
-                frame.max.x = sliver_width + h_pad;
-            } else {
-                frame.min.x = display_width - sliver_width - h_pad;
-                frame.max.x = frame.min.x + width;
-            }
-
-            if swiping {
-                // During swipe, keep full height — AX resize to sliver
-                // height can't be undone via SLS when the window scrolls
-                // back on-screen.
-                frame.min.y += menubar_height + pad_top;
-                frame.max.y += menubar_height + pad_top;
-            } else {
-                let is_stacked = layout_strip
-                    .index_of(entity)
-                    .ok()
-                    .and_then(|idx| layout_strip.get(idx).ok())
-                    .is_some_and(|col| matches!(col, Column::Stack(_)));
-
-                if is_stacked {
-                    // Don't compress stacked windows vertically when off-screen.
-                    // The height reduction corrupts their proportions: when the
-                    // column scrolls back on-screen, binpack_heights makes the
-                    // last window absorb all remaining space.
-                    frame.min.y += menubar_height + pad_top;
-                    frame.max.y += menubar_height + pad_top;
-                } else {
-                    let inset =
-                        (f64::from(bounds.height()) * (1.0 - config.sliver_height()) / 2.0) as i32;
-                    frame.min.y += menubar_height + pad_top + inset;
-                    frame.max.y += menubar_height + pad_top - inset;
-                }
-            }
-        } else {
-            frame.min.y += menubar_height + pad_top;
-            frame.max.y += menubar_height + pad_top;
-        }
-
-        // During a reload, skip markers for windows whose target matches
-        // their pre-reload position — they don't need to move at all.
-        if let Some(pre) = pre_positions
-            && let Some(pre_frame) = pre.get(&entity)
-            && pre_frame.min == frame.min
-            && pre_frame.size() == frame.size()
-        {
-            continue;
-        }
-
-        if old_frame.size() != frame.size() {
-            resize_entity(
-                entity,
-                Size::new(frame.width(), frame.height()),
-                active_display.id(),
-                commands,
+            // Convert frame to absolute coordinates (display-relative).
+            let abs_frame = IRect::from_corners(
+                active_display.display().absolute_coords(frame.min),
+                active_display.display().absolute_coords(frame.max),
             );
-        }
 
-        if old_frame.min != frame.min {
-            reposition_entity(entity, frame.min, active_display.id(), commands);
+            Some((entity, WindowInfo {
+                layout_frame: abs_frame,
+                old_frame,
+                h_pad: get_window_h_pad(entity),
+                is_stacked,
+            }))
+        })
+        .collect();
+
+    let display_geo = DisplayGeometry {
+        bounds: active_display.bounds(),
+        menubar_height,
+        dock_bottom: active_display.dock().map_or(0, |dock| {
+            if let DockPosition::Bottom(offset) = dock { *offset } else { 0 }
+        }),
+        origin: IVec2::ZERO, // absolute_coords already applied above
+    };
+    let padding = LayoutPadding::from(config.edge_padding());
+    let sliver = SliverConfig {
+        width: config.sliver_width(),
+        height_ratio: config.sliver_height(),
+    };
+
+    let updates = compute_final_frames(
+        &display_geo,
+        &padding,
+        &sliver,
+        swiping,
+        pre_positions,
+        &window_infos,
+    );
+
+    // Apply ECS commands for each updated window.
+    let display_id = active_display.id();
+    for (entity, FrameUpdate { frame, moved, resized, .. }) in updates {
+        if resized {
+            resize_entity(entity, Size::new(frame.width(), frame.height()), display_id, commands);
+        }
+        if moved {
+            reposition_entity(entity, frame.min, display_id, commands);
         }
     }
 }
@@ -1700,149 +1530,4 @@ pub(crate) fn reposition_dragged_window(
     }
 }
 
-#[allow(clippy::needless_pass_by_value)]
-pub(crate) fn update_overlays(
-    windows: Windows,
-    applications: Query<&Application>,
-    _: ActiveDisplay, // prevents this system from running without an active workspace
-    overlay_mgr: Option<NonSendMut<OverlayManager>>,
-    config: Configuration,
-) {
-    use crate::overlay::{BorderParams, OverlayApi};
-
-    let Some(mut overlay_mgr) = overlay_mgr else {
-        return;
-    };
-
-    let dim_opacity = config.config().dim_inactive_opacity();
-    let border_enabled = config.config().border_active_window();
-
-    if dim_opacity == 0.0 && !border_enabled {
-        overlay_mgr.remove_all();
-        return;
-    }
-
-    // Find the focused managed window's absolute CG frame.
-    // Skip floating/unmanaged windows — no overlay or border for those.
-    let (focused_frame, focused_border_radius) = if let Some((window, _, unmanaged)) = windows
-        .focused()
-        .and_then(|(_, entity)| windows.get_managed(entity))
-        && unmanaged.is_none()
-        && !window.is_full_screen()
-    {
-        let frame = window.frame();
-        let h_pad = window.horizontal_padding();
-        let v_pad = window.vertical_padding();
-        let focused_frame = Some(IRect::new(
-            frame.min.x + h_pad,
-            frame.min.y + v_pad,
-            frame.max.x - h_pad,
-            frame.max.y - v_pad,
-        ));
-
-        // Look up per-window border_radius from config (dynamic, respects hot-reload).
-        let title = window.title().unwrap_or_default();
-        let bundle_id = windows
-            .find_parent(window.id())
-            .and_then(|(_, _, parent)| applications.get(parent).ok())
-            .map(|app| app.bundle_id().unwrap_or_default())
-            .unwrap_or_default();
-        let properties = config.find_window_properties(&title, bundle_id);
-        let focused_border_radius = properties.iter().find_map(|p| p.border_radius);
-
-        (focused_frame, focused_border_radius)
-    } else {
-        overlay_mgr.hide_all();
-        return;
-    };
-
-    let border_params = border_enabled.then(|| BorderParams {
-        color: config.config().border_color(),
-        opacity: config.config().border_opacity(),
-        width: config.config().border_width(),
-        radius: focused_border_radius.unwrap_or_else(|| config.config().border_radius()),
-    });
-
-    let dim_color = config.config().dim_inactive_color();
-    overlay_mgr.update(
-        dim_opacity,
-        dim_color,
-        focused_frame,
-        border_params.as_ref(),
-    );
-}
-
-/// Shows/hides the snap preview overlay based on `DragContext`.
-#[allow(clippy::needless_pass_by_value)]
-pub(crate) fn update_snap_preview(
-    drag_ctx: Option<Res<DragContext>>,
-    displays: Query<&Display>,
-    config: Res<Config>,
-    overlay_mgr: Option<NonSendMut<OverlayManager>>,
-) {
-    use crate::logic::snap::snap_frame;
-    use crate::overlay::{BorderParams, OverlayApi};
-
-    let Some(mut overlay_mgr) = overlay_mgr else {
-        return;
-    };
-
-    if !config.edge_snap_preview_enabled() {
-        overlay_mgr.hide_snap_preview();
-        return;
-    }
-
-    let zone = drag_ctx.as_ref().and_then(|s| s.snap_zone);
-
-    let Some(zone) = zone else {
-        overlay_mgr.hide_snap_preview();
-        return;
-    };
-
-    let display_id = drag_ctx.as_ref().unwrap().display_id;
-    let Some(display) = displays.iter().find(|d| d.id() == display_id) else {
-        overlay_mgr.hide_snap_preview();
-        return;
-    };
-
-    let bounds = display.bounds();
-    let pad = config.edge_padding();
-    let (origin, size) = snap_frame(zone, &bounds, pad);
-    let frame = IRect::from_corners(origin, origin + size);
-
-    let opacity = config.edge_snap_preview_opacity();
-    let border = BorderParams {
-        color: config.border_color(),
-        opacity: config.border_opacity(),
-        width: config.border_width(),
-        radius: config.border_radius(),
-    };
-
-    overlay_mgr.update_snap_preview(frame, opacity, &border);
-}
-
-/// Despawns stale `WindowDraggedMarker` entities during a swipe.
-///
-/// Gated with `run_if(in_state(Swiping))` — replaces the manual
-/// `swipe_tracker.active()` guard that was previously inside
-/// `reposition_dragged_window`.
-pub(crate) fn swipe_cleanup_drag_markers(
-    markers: Query<Entity, With<WindowDraggedMarker>>,
-    mut commands: Commands,
-) {
-    for entity in &markers {
-        commands.entity(entity).despawn();
-    }
-}
-
-/// Hides all overlays while Swiping or MissionControl is active.
-///
-/// Counterpart to `update_overlays`, which now only runs outside those modes.
-pub(crate) fn hide_overlays_on_mode_change(
-    overlay_mgr: Option<NonSendMut<OverlayManager>>,
-) {
-    if let Some(mut overlay_mgr) = overlay_mgr {
-        use crate::overlay::OverlayApi;
-        overlay_mgr.hide_all();
-    }
-}
+// Overlay systems: see systems/overlay.rs

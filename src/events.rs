@@ -121,6 +121,12 @@ pub enum Event {
 
     /// Dump internal window manager state.
     PrintState,
+
+    /// Apply a JSON patch to the running config (from MCP set_config).
+    ConfigPatch(serde_json::Value),
+
+    /// Trigger a config file reload (from MCP reload_config).
+    ConfigReload,
 }
 
 /// `EventSender` is a thin wrapper around a `std::sync::mpsc::Sender` for `Event`s.

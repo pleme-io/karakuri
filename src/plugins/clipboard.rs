@@ -14,6 +14,7 @@ const DEFAULT_HISTORY_SIZE: usize = 50;
 
 /// Message fired when the clipboard content changes.
 #[derive(Clone, Debug, Message)]
+#[allow(dead_code)] // Fields read by clipboard consumer systems (scripting, MCP).
 pub struct ClipboardChanged {
     pub content: String,
 }

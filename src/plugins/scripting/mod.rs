@@ -24,8 +24,13 @@ impl Plugin for ScriptingPlugin {
         // Register API functions into the Rhai engine before loading scripts.
         {
             let engine_arc = script_engine.engine();
-            let mut engine = engine_arc.write().expect("engine lock for API registration");
-            api::register_all(&mut engine);
+            match engine_arc.write() {
+                Ok(mut engine) => api::register_all(&mut engine),
+                Err(poisoned) => {
+                    tracing::error!("scripting engine lock poisoned, recovering");
+                    api::register_all(&mut poisoned.into_inner());
+                }
+            }
         }
 
         // Load user scripts.

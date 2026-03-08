@@ -12,6 +12,7 @@ use crate::events::{Event, EventSender};
 use crate::snapshot::StateSnapshot;
 
 const QUERY_PREFIX: &[u8] = b"query\0";
+const SET_CONFIG_PREFIX: &[u8] = b"set_config\0";
 
 /// `CommandReader` is responsible for sending and receiving commands via a Unix socket.
 /// It acts as an IPC mechanism for the `ayatsuri` application, allowing external processes
@@ -105,6 +106,23 @@ impl CommandReader {
                 continue;
             }
 
+            // set_config messages start with "set_config\0" — apply patch and respond.
+            if buffer.starts_with(SET_CONFIG_PREFIX) {
+                let json_bytes = &buffer[SET_CONFIG_PREFIX.len()..];
+                let json_str = String::from_utf8_lossy(json_bytes).trim_end_matches('\0').to_string();
+                let response = match serde_json::from_str::<serde_json::Value>(&json_str) {
+                    Ok(patch) => {
+                        _ = self.events.send(Event::ConfigPatch(patch));
+                        r#"{"ok":true}"#.to_string()
+                    }
+                    Err(e) => format!(r#"{{"error":"invalid JSON: {e}"}}"#),
+                };
+                let len = (response.len() as u32).to_le_bytes();
+                _ = stream.write_all(&len);
+                _ = stream.write_all(response.as_bytes());
+                continue;
+            }
+
             // Existing fire-and-forget command dispatch.
             let argv = buffer
                 .split(|c| *c == 0)
@@ -138,13 +156,63 @@ impl CommandReader {
             "focused" => serde_json::to_string(&snapshot.focused_window),
             "displays" => serde_json::to_string(&snapshot.displays),
             "config" => serde_json::to_string(&snapshot.config_flags),
+            "windows" => serde_json::to_string(&snapshot.all_windows),
+            "full_config" => serde_json::to_string(&snapshot.full_config),
+            "workspaces" => {
+                let ws: Vec<_> = snapshot
+                    .displays
+                    .iter()
+                    .flat_map(|d| {
+                        d.workspaces.iter().map(move |w| {
+                            serde_json::json!({
+                                "id": w.id,
+                                "is_active": w.is_active,
+                                "display_id": d.id,
+                                "window_count": w.layout_strip.windows.len(),
+                            })
+                        })
+                    })
+                    .collect();
+                serde_json::to_string(&ws)
+            }
+            q if q.starts_with("window:") => {
+                let id_str = &q[7..];
+                if let Ok(id) = id_str.parse::<i32>() {
+                    let win = snapshot.all_windows.iter().find(|w| w.id == id);
+                    serde_json::to_string(&win)
+                } else {
+                    Ok(r#"{"error":"invalid window id"}"#.to_string())
+                }
+            }
             _ => Ok(r#"{"error":"unknown query"}"#.to_string()),
         };
 
         let json = response.unwrap_or_else(|e| format!(r#"{{"error":"{e}"}}"#));
-        let len = (json.len() as u32).to_le_bytes();
+        let Ok(len_u32) = u32::try_from(json.len()) else {
+            return;
+        };
+        let len = len_u32.to_le_bytes();
         _ = stream.write_all(&len);
         _ = stream.write_all(json.as_bytes());
+    }
+
+    /// Sends a set_config patch to the running daemon.
+    pub fn send_set_config(json: &str) -> Result<String> {
+        let msg = format!("set_config\0{json}");
+        let msg_bytes = msg.as_bytes();
+        let size: u32 = msg_bytes.len().try_into()?;
+
+        let mut stream = UnixStream::connect(CommandReader::SOCKET_PATH)?;
+        stream.write_all(&size.to_le_bytes())?;
+        stream.write_all(msg_bytes)?;
+
+        // Read response
+        let mut len_buf = [0u8; 4];
+        stream.read_exact(&mut len_buf)?;
+        let resp_len = u32::from_le_bytes(len_buf) as usize;
+        let mut resp_buf = vec![0u8; resp_len];
+        stream.read_exact(&mut resp_buf)?;
+        Ok(String::from_utf8_lossy(&resp_buf).to_string())
     }
 }
 

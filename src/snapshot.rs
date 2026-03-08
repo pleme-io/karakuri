@@ -7,6 +7,10 @@ pub struct StateSnapshot {
     pub displays: Vec<DisplaySnapshot>,
     pub focused_window: Option<WindowSnapshot>,
     pub config_flags: ConfigFlags,
+    /// All windows across all displays/workspaces (flat list for MCP list_windows).
+    pub all_windows: Vec<WindowSnapshot>,
+    /// Full config options as JSON.
+    pub full_config: serde_json::Value,
 }
 
 #[derive(Serialize, Clone)]
@@ -40,6 +44,9 @@ pub struct WindowSnapshot {
     pub is_focused: bool,
     pub is_unmanaged: bool,
     pub is_full_width: bool,
+    pub is_stacked: bool,
+    pub display_id: u32,
+    pub workspace_id: u64,
 }
 
 #[derive(Serialize, Clone)]

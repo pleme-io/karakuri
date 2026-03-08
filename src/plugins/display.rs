@@ -7,6 +7,9 @@ use bevy::time::common_conditions::on_timer;
 
 use crate::ecs::{PollForNotifications, systems, triggers};
 
+/// Display poll frequency. Matches `Config::display_poll_interval()` default.
+/// Bevy's `on_timer` requires a compile-time duration; dynamic adjustment
+/// would require replacing with a manual time check.
 const DISPLAY_CHANGE_CHECK_FREQ_MS: u64 = 1000;
 
 /// Plugin for display management: gathering displays, detecting rearrangements,

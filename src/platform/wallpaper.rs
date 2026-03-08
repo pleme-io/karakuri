@@ -13,9 +13,9 @@ fn expand_tilde(path: &str) -> String {
     path.to_string()
 }
 
-/// Get the main thread marker, assuming we're on the main thread.
-fn mtm() -> MainThreadMarker {
-    MainThreadMarker::new().expect("wallpaper APIs must be called from the main thread")
+/// Get the main thread marker, returning an error if not on the main thread.
+fn mtm() -> Result<MainThreadMarker, String> {
+    MainThreadMarker::new().ok_or_else(|| "wallpaper APIs must be called from the main thread".into())
 }
 
 /// Set the desktop wallpaper on all connected screens.
@@ -24,7 +24,7 @@ pub fn set_wallpaper_all(path: &str) -> Result<(), String> {
     let url = file_url(&expanded);
     let workspace = NSWorkspace::sharedWorkspace();
     let options = NSDictionary::new();
-    let screens = NSScreen::screens(mtm());
+    let screens = NSScreen::screens(mtm()?);
     let count = screens.count();
 
     if count == 0 {
@@ -50,7 +50,7 @@ pub fn set_wallpaper_for_screen(path: &str, screen_index: usize) -> Result<(), S
     let url = file_url(&expanded);
     let workspace = NSWorkspace::sharedWorkspace();
     let options = NSDictionary::new();
-    let screens = NSScreen::screens(mtm());
+    let screens = NSScreen::screens(mtm()?);
     let count = screens.count();
 
     if screen_index >= count {
@@ -76,7 +76,7 @@ pub fn get_wallpaper() -> Result<String, String> {
 /// Get the current wallpaper path for a specific screen by index.
 pub fn get_wallpaper_for_screen(screen_index: usize) -> Result<String, String> {
     let workspace = NSWorkspace::sharedWorkspace();
-    let screens = NSScreen::screens(mtm());
+    let screens = NSScreen::screens(mtm()?);
     let count = screens.count();
 
     if screen_index >= count {

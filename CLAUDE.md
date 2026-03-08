@@ -133,9 +133,10 @@ these modules — they never contain the algorithm inline.
 |--------|-----------|-------|
 | `logic/snap.rs` | `detect_snap_zone`, `snap_frame` | 16 |
 | `logic/navigation.rs` | `window_in_direction`, `display_in_direction` | 24 |
-| `logic/swipe.rs` | `smooth_velocity`, `decay_velocity`, `velocity_to_pixel_shift`, `clamp_viewport_offset`, `below_stop_threshold`, `delta_to_shift`, `below_swipe_resolution` | 31 |
-| `logic/drag.rs` | `clamp_origin_to_bounds`, `offset_frame_within_bounds` | 15 |
-| `logic/spring.rs` | `step` (damped harmonic oscillator) | 8 |
+| `logic/swipe.rs` | `smooth_velocity`, `velocity_to_pixel_shift`, `clamp_viewport_offset`, `below_stop_threshold`, `delta_to_shift` | 23 |
+| `logic/drag.rs` | `clamp_origin_to_bounds`, `offset_frame_within_bounds` | 16 |
+| `logic/spring.rs` | `step` (damped harmonic oscillator) | 11 |
+| `logic/layout.rs` | `compute_final_frames` (coordinate transforms, sliver logic) | 18 |
 
 **Convention**: When adding new behavior, write the pure function in `logic/`
 first with unit tests, then call it from the ECS layer. The ECS layer handles

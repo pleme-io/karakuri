@@ -4,6 +4,7 @@ use tracing::info;
 
 /// Message for sending a notification.
 #[derive(Clone, Debug, Message)]
+#[allow(dead_code)] // Fields consumed by notification dispatch (scripting, MCP).
 pub struct SendNotification {
     pub title: String,
     pub body: String,
@@ -11,6 +12,7 @@ pub struct SendNotification {
 
 /// Message fired when a notification is clicked.
 #[derive(Clone, Debug, Message)]
+#[allow(dead_code)] // Fields consumed by notification click observer.
 pub struct NotificationClicked {
     pub title: String,
 }

@@ -124,15 +124,33 @@ fn parse_operation(argv: &[&str]) -> Result<Operation> {
 
     let out = match cmd {
         "focus" => Operation::Focus(parse_direction(argv.get(1).ok_or(err)?)?),
+        "focus_id" => {
+            let id: i32 = argv
+                .get(1)
+                .ok_or_else(|| err.clone())?
+                .parse()
+                .map_err(|_| err.clone())?;
+            Operation::FocusById(id)
+        }
         "swap" => Operation::Swap(parse_direction(argv.get(1).ok_or(err)?)?),
         "center" => Operation::Center,
         "resize" => Operation::Resize,
+        "resize_to" => {
+            let w: i32 = argv.get(1).ok_or_else(|| err.clone())?.parse().map_err(|_| err.clone())?;
+            let h: i32 = argv.get(2).ok_or_else(|| err.clone())?.parse().map_err(|_| err.clone())?;
+            Operation::ResizeTo(w, h)
+        }
         "fullwidth" => Operation::FullWidth,
         "manage" => Operation::Manage,
         "equalize" => Operation::Equalize,
         "stack" => Operation::Stack(true),
         "unstack" => Operation::Stack(false),
         "nextdisplay" => Operation::ToNextDisplay,
+        "move_to" => {
+            let x: i32 = argv.get(1).ok_or_else(|| err.clone())?.parse().map_err(|_| err.clone())?;
+            let y: i32 = argv.get(2).ok_or_else(|| err.clone())?.parse().map_err(|_| err.clone())?;
+            Operation::MoveTo(x, y)
+        }
         _ => {
             return Err(err);
         }
@@ -177,6 +195,11 @@ pub fn parse_command(argv: &[&str]) -> Result<Command> {
         "mouse" => Command::Mouse(parse_mouse_move(&argv[1..])?),
         "quit" => Command::Quit,
         "exec" => Command::Exec(argv[1..].join(" ")),
+        "mode" => {
+            let mode = argv.get(1).unwrap_or(&"tiling");
+            Command::SetMode((*mode).to_string())
+        }
+        "reload" => Command::ReloadConfig,
         _ => {
             return Err(Error::InvalidConfig(format!(
                 "{}: Unhandled command '{argv:?}'",
@@ -241,19 +264,6 @@ impl Config {
     /// A `MainOptions` struct containing the main configuration options.
     pub fn options(&self) -> MainOptions {
         self.inner().options.clone()
-    }
-
-    // Returns the animation speed in 1/10th of screen size per second.
-    // E.g. a value of 20 means: move at a speed of two screen sizes per second.
-    // If a screen is 1920px, the calculated speed would be 3840 pixels/second.
-    pub fn animation_speed(&self) -> f64 {
-        self.options()
-            .animation_speed
-            // If unset, set it to something high, so the move happens immediately,
-            // effectively disabling animation.
-            .unwrap_or(1_000_000.0)
-            .max(5.0)
-            / 10.0
     }
 
     /// Finds a keybinding matching the given `keycode` and `modifier` mask.
@@ -392,15 +402,6 @@ impl Config {
             .clamp(1.0, 10.0)
     }
 
-    pub fn mode(&self) -> &WindowMode {
-        // Can't return a reference into the guard, so we match and return a static ref.
-        // Safe because the enum is simple and we only need equality checks.
-        match self.options().mode {
-            WindowMode::Tiling => &WindowMode::Tiling,
-            WindowMode::Floating => &WindowMode::Floating,
-        }
-    }
-
     pub fn is_floating_mode(&self) -> bool {
         self.options().mode == WindowMode::Floating
     }
@@ -446,16 +447,59 @@ impl Config {
             || g.five_finger_spread.unwrap_or(false)
     }
 
-    pub fn suppress_four_finger_gestures(&self) -> bool {
-        self.options().gesture_suppress.four_finger.unwrap_or(false)
-    }
-
-    pub fn scripting(&self) -> Option<ScriptingConfig> {
-        self.inner().scripting.clone()
-    }
-
     pub fn startup_apps(&self) -> Vec<StartupApp> {
         self.options().startup
+    }
+
+    /// Build `SpringParams` from config (or defaults).
+    pub fn spring_params(&self) -> crate::logic::spring::SpringParams {
+        let s = &self.options().spring;
+        crate::logic::spring::SpringParams {
+            stiffness: s.stiffness.unwrap_or(800.0).max(1.0),
+            damping_ratio: s.damping_ratio.unwrap_or(1.0).max(0.01),
+            epsilon: s.epsilon.unwrap_or(0.5).max(0.01),
+        }
+    }
+
+    /// How many frames the reload guard waits before firing a consolidated reshuffle.
+    pub fn settle_frames(&self) -> u32 {
+        self.options().animation.settle_frames.unwrap_or(2).max(1)
+    }
+
+    /// Display arrangement change poll interval. Used by MCP `get_config` and tests.
+    /// Display plugin uses compile-time constant (Bevy `on_timer` limitation).
+    #[allow(dead_code)]
+    pub fn display_poll_interval(&self) -> std::time::Duration {
+        std::time::Duration::from_millis(
+            self.options().display.change_poll_ms.unwrap_or(1000).max(100),
+        )
+    }
+
+    /// Apply a JSON patch to the current config, merging new values into the existing options.
+    /// This reuses the same ArcSwap mechanism as file-based hot-reload.
+    pub fn apply_patch(&self, patch: &serde_json::Value) -> Result<()> {
+        let inner = self.inner();
+        // Serialize current options to JSON, merge patch, deserialize back.
+        let mut current = serde_json::to_value(&inner.options)
+            .map_err(|e| Error::InvalidConfig(format!("serialize current config: {e}")))?;
+        json_merge(&mut current, patch);
+        let patched: MainOptions = serde_json::from_value(current)
+            .map_err(|e| Error::InvalidConfig(format!("invalid config patch: {e}")))?;
+        let new_inner = InnerConfig {
+            options: patched,
+            bindings: inner.bindings.clone(),
+            windows: inner.windows.clone(),
+            scripting: inner.scripting.clone(),
+            execs: inner.execs.clone(),
+            system_defaults: inner.system_defaults.clone(),
+        };
+        self.inner.store(Arc::new(new_inner));
+        Ok(())
+    }
+
+    /// Returns the full config options as a JSON value (for MCP get_full_config).
+    pub fn options_json(&self) -> serde_json::Value {
+        serde_json::to_value(&self.options()).unwrap_or_default()
     }
 
     /// Returns a merged map of all defaults to apply: explicit `system_defaults`
@@ -533,6 +577,20 @@ impl Config {
     }
 }
 
+/// Deep-merge `patch` into `target`. Object keys are merged recursively;
+/// non-object values are overwritten.
+fn json_merge(target: &mut serde_json::Value, patch: &serde_json::Value) {
+    use serde_json::Value;
+    match (target, patch) {
+        (Value::Object(t), Value::Object(p)) => {
+            for (k, v) in p {
+                json_merge(t.entry(k.clone()).or_insert(Value::Null), v);
+            }
+        }
+        (target, patch) => *target = patch.clone(),
+    }
+}
+
 fn parse_hex_color(hex: &str) -> (f64, f64, f64) {
     let hex = hex.strip_prefix('#').unwrap_or(hex);
     if hex.len() != 6 {
@@ -567,7 +625,7 @@ impl TryFrom<&str> for Config {
     }
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Clone, Debug)]
 #[serde(untagged)]
 enum OneOrMore {
     Single(Keybinding),
@@ -592,7 +650,7 @@ impl OneOrMore {
 
 /// `InnerConfig` holds the actual configuration data parsed from a file, including options, keybindings, and window parameters.
 /// It is typically accessed via an `Arc<RwLock<InnerConfig>>` within the `Config` struct.
-#[derive(Deserialize, Debug, Default)]
+#[derive(Deserialize, Clone, Debug, Default)]
 #[serde(default)]
 struct InnerConfig {
     options: MainOptions,
@@ -620,7 +678,7 @@ pub enum DefaultsValue {
 }
 
 /// Configuration for the Rhai scripting engine.
-#[derive(Deserialize, Clone, Debug, Default)]
+#[derive(Deserialize, Serialize, Clone, Debug, Default)]
 pub struct ScriptingConfig {
     /// Path to the init script (e.g., `~/.config/ayatsuri/init.rhai`).
     pub init_script: Option<String>,
@@ -709,7 +767,7 @@ impl InnerConfig {
 }
 
 /// Window management mode: tiling (automatic column layout) or floating (free positioning).
-#[derive(Clone, Debug, Deserialize, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, Serialize, Default, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum WindowMode {
     /// Windows are automatically arranged in a column layout.
@@ -719,7 +777,7 @@ pub enum WindowMode {
     Floating,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub enum SwipeGestureDirection {
     Natural,
     Reversed,
@@ -728,7 +786,7 @@ pub enum SwipeGestureDirection {
 /// Configuration for suppressing trackpad gestures.
 /// Prevents macOS from acting on the specified gestures by swallowing
 /// the events at the CGEventTap level.
-#[derive(Deserialize, Clone, Debug, Default)]
+#[derive(Deserialize, Serialize, Clone, Debug, Default)]
 pub struct GestureSuppress {
     /// Suppress all 4-finger gestures (Space switching, etc.). Default: false.
     pub four_finger: Option<bool>,
@@ -741,7 +799,7 @@ pub struct GestureSuppress {
 /// Configuration for edge snapping in floating mode.
 /// Each field enables snapping to a specific screen zone when the cursor is near
 /// that edge on mouse-up.
-#[derive(Deserialize, Clone, Debug, Default)]
+#[derive(Deserialize, Serialize, Clone, Debug, Default)]
 pub struct EdgeSnapConfig {
     /// Snap to left half of screen.
     pub left: Option<bool>,
@@ -764,9 +822,37 @@ pub struct EdgeSnapConfig {
     pub sticky_dwell_ms: Option<u64>,
 }
 
+/// Spring animation parameters. Controls how windows animate to their target positions.
+#[derive(Deserialize, Serialize, Clone, Debug, Default)]
+pub struct SpringConfig {
+    /// How stiff the spring is. Higher = faster/snappier. Default: 800.0.
+    pub stiffness: Option<f64>,
+    /// Damping ratio. 1.0 = critically damped (fastest without overshoot).
+    /// < 1.0 = bouncy. > 1.0 = mushy. Default: 1.0.
+    pub damping_ratio: Option<f64>,
+    /// Stop threshold in pixels. Animation snaps to target when displacement
+    /// and velocity are both below this. Default: 0.5.
+    pub epsilon: Option<f64>,
+}
+
+/// Animation timing parameters.
+#[derive(Deserialize, Serialize, Clone, Debug, Default)]
+pub struct AnimationConfig {
+    /// Frames to wait for cascading events to settle before consolidated reshuffle.
+    /// Default: 2.
+    pub settle_frames: Option<u32>,
+}
+
+/// Display management parameters.
+#[derive(Deserialize, Serialize, Clone, Debug, Default)]
+pub struct DisplayConfig {
+    /// How often to poll for display arrangement changes (milliseconds). Default: 1000.
+    pub change_poll_ms: Option<u64>,
+}
+
 /// `MainOptions` represents the primary configuration options for the window manager.
 /// These options control various behaviors such as mouse focus, gesture recognition, and window animation.
-#[derive(Deserialize, Clone, Debug, Default)]
+#[derive(Deserialize, Serialize, Clone, Debug, Default)]
 pub struct MainOptions {
     /// Window management mode: "tiling" (default) or "floating".
     /// In floating mode all windows are free-positioned; the tiling layout is disabled.
@@ -857,10 +943,22 @@ pub struct MainOptions {
     /// Applications to launch on startup, with optional delays.
     #[serde(default)]
     pub startup: Vec<StartupApp>,
+
+    /// Spring animation parameters (stiffness, damping, epsilon).
+    #[serde(default)]
+    pub spring: SpringConfig,
+
+    /// Animation timing parameters (settle_frames).
+    #[serde(default)]
+    pub animation: AnimationConfig,
+
+    /// Display management parameters (change_poll_ms).
+    #[serde(default)]
+    pub display: DisplayConfig,
 }
 
 /// An application to launch on startup.
-#[derive(Deserialize, Clone, Debug)]
+#[derive(Deserialize, Serialize, Clone, Debug)]
 pub struct StartupApp {
     /// Application name (passed to `open -a`).
     pub app: String,
@@ -876,7 +974,7 @@ pub fn default_preset_column_widths() -> Vec<f64> {
 
 /// `Keybinding` represents a keyboard shortcut and the command it triggers.
 /// It includes the key, its raw keycode, modifier keys, and the associated command.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Keybinding {
     pub key: String,
     pub code: u8,
@@ -901,9 +999,11 @@ impl<'de> Deserialize<'de> for Keybinding {
     {
         let input = String::deserialize(deserializer)?;
         let mut parts = input.split('-').map(str::trim).collect::<Vec<_>>();
-        let key = parts.pop();
+        let Some(key) = parts.pop() else {
+            return Err(de::Error::custom(format!("Empty keybinding: {input:?}")));
+        };
 
-        if parts.len() > 1 || key.is_none() {
+        if parts.len() > 1 {
             return Err(de::Error::custom(format!("Too many dashes: {input:?}")));
         }
 
@@ -913,7 +1013,7 @@ impl<'de> Deserialize<'de> for Keybinding {
         };
 
         Ok(Keybinding {
-            key: key.unwrap().to_string(),
+            key: key.to_string(),
             code: 0,
             modifiers,
             command: Command::Quit,
@@ -1468,4 +1568,308 @@ fn test_config_defaults() {
     assert_eq!(config.border_width(), 2.0);
     assert_eq!(config.border_radius(), 10.0);
     assert_eq!(config.menubar_height(), None);
+}
+
+#[test]
+#[allow(clippy::float_cmp)]
+fn test_spring_config_defaults() {
+    let config = Config::default();
+    let params = config.spring_params();
+    assert_eq!(params.stiffness, 800.0);
+    assert_eq!(params.damping_ratio, 1.0);
+    assert_eq!(params.epsilon, 0.5);
+}
+
+#[test]
+#[allow(clippy::float_cmp)]
+fn test_spring_config_from_toml() {
+    let input = r#"
+[options]
+[options.spring]
+stiffness = 1200.0
+damping_ratio = 0.8
+epsilon = 1.0
+"#;
+    let config = Config::try_from(input).unwrap();
+    let params = config.spring_params();
+    assert_eq!(params.stiffness, 1200.0);
+    assert_eq!(params.damping_ratio, 0.8);
+    assert_eq!(params.epsilon, 1.0);
+}
+
+#[test]
+fn test_settle_frames_default() {
+    let config = Config::default();
+    assert_eq!(config.settle_frames(), 2);
+}
+
+#[test]
+fn test_settle_frames_from_config() {
+    let input = r#"
+[options]
+[options.animation]
+settle_frames = 5
+"#;
+    let config = Config::try_from(input).unwrap();
+    assert_eq!(config.settle_frames(), 5);
+}
+
+#[test]
+fn test_display_poll_interval_default() {
+    let config = Config::default();
+    assert_eq!(
+        config.display_poll_interval(),
+        std::time::Duration::from_millis(1000)
+    );
+}
+
+#[test]
+fn test_display_poll_interval_min_clamp() {
+    let input = r#"
+[options]
+[options.display]
+change_poll_ms = 10
+"#;
+    let config = Config::try_from(input).unwrap();
+    // Should be clamped to min 100ms
+    assert_eq!(
+        config.display_poll_interval(),
+        std::time::Duration::from_millis(100)
+    );
+}
+
+#[test]
+fn test_apply_patch_changes_mode() {
+    let config = Config::default();
+    assert!(!config.is_floating_mode());
+
+    let patch = serde_json::json!({"mode": "floating"});
+    config.apply_patch(&patch).unwrap();
+    assert!(config.is_floating_mode());
+}
+
+#[test]
+fn test_apply_patch_changes_spring() {
+    let config = Config::default();
+    let patch = serde_json::json!({"spring": {"stiffness": 1500.0}});
+    config.apply_patch(&patch).unwrap();
+    let params = config.spring_params();
+    assert!((params.stiffness - 1500.0).abs() < f64::EPSILON);
+    // Other spring params should remain default
+    assert!((params.damping_ratio - 1.0).abs() < f64::EPSILON);
+}
+
+#[test]
+fn test_apply_patch_nested_merge() {
+    let config = Config::default();
+
+    // First patch sets left padding
+    let patch1 = serde_json::json!({"padding_left": 10});
+    config.apply_patch(&patch1).unwrap();
+    assert_eq!(config.edge_padding().3, 10);
+
+    // Second patch sets right padding — left should remain
+    let patch2 = serde_json::json!({"padding_right": 20});
+    config.apply_patch(&patch2).unwrap();
+    assert_eq!(config.edge_padding().3, 10);
+    assert_eq!(config.edge_padding().1, 20);
+}
+
+#[test]
+fn test_apply_patch_invalid_json_returns_error() {
+    let config = Config::default();
+    let patch = serde_json::json!({"mode": 42}); // mode expects string
+    assert!(config.apply_patch(&patch).is_err());
+}
+
+#[test]
+fn test_options_json_roundtrip() {
+    let config = Config::default();
+    let json = config.options_json();
+    assert!(json.is_object());
+    assert!(json.get("mode").is_some());
+    assert!(json.get("spring").is_some());
+}
+
+#[test]
+fn test_parse_command_all_operations() {
+    assert!(matches!(
+        parse_command(&["window", "focus", "east"]),
+        Ok(Command::Window(Operation::Focus(Direction::East)))
+    ));
+    assert!(matches!(
+        parse_command(&["window", "swap", "west"]),
+        Ok(Command::Window(Operation::Swap(Direction::West)))
+    ));
+    assert!(matches!(
+        parse_command(&["window", "center"]),
+        Ok(Command::Window(Operation::Center))
+    ));
+    assert!(matches!(
+        parse_command(&["window", "resize"]),
+        Ok(Command::Window(Operation::Resize))
+    ));
+    assert!(matches!(
+        parse_command(&["window", "fullwidth"]),
+        Ok(Command::Window(Operation::FullWidth))
+    ));
+    assert!(matches!(
+        parse_command(&["window", "manage"]),
+        Ok(Command::Window(Operation::Manage))
+    ));
+    assert!(matches!(
+        parse_command(&["window", "equalize"]),
+        Ok(Command::Window(Operation::Equalize))
+    ));
+    assert!(matches!(
+        parse_command(&["window", "stack"]),
+        Ok(Command::Window(Operation::Stack(true)))
+    ));
+    assert!(matches!(
+        parse_command(&["window", "unstack"]),
+        Ok(Command::Window(Operation::Stack(false)))
+    ));
+    assert!(matches!(
+        parse_command(&["window", "nextdisplay"]),
+        Ok(Command::Window(Operation::ToNextDisplay))
+    ));
+    assert!(matches!(
+        parse_command(&["quit"]),
+        Ok(Command::Quit)
+    ));
+    assert!(matches!(
+        parse_command(&["printstate"]),
+        Ok(Command::PrintState)
+    ));
+}
+
+#[test]
+fn test_parse_command_new_operations() {
+    assert!(matches!(
+        parse_command(&["window", "focus_id", "42"]),
+        Ok(Command::Window(Operation::FocusById(42)))
+    ));
+    assert!(matches!(
+        parse_command(&["window", "move_to", "100", "200"]),
+        Ok(Command::Window(Operation::MoveTo(100, 200)))
+    ));
+    assert!(matches!(
+        parse_command(&["window", "resize_to", "800", "600"]),
+        Ok(Command::Window(Operation::ResizeTo(800, 600)))
+    ));
+    assert!(matches!(
+        parse_command(&["mode", "floating"]),
+        Ok(Command::SetMode(_))
+    ));
+    assert!(matches!(
+        parse_command(&["reload"]),
+        Ok(Command::ReloadConfig)
+    ));
+}
+
+#[test]
+fn test_parse_command_exec() {
+    let result = parse_command(&["exec", "open", "-a", "Safari"]);
+    assert!(matches!(result, Ok(Command::Exec(cmd)) if cmd == "open -a Safari"));
+}
+
+#[test]
+fn test_parse_command_invalid() {
+    assert!(parse_command(&["nonexistent"]).is_err());
+    assert!(parse_command(&["window", "invalid"]).is_err());
+    assert!(parse_command(&["window", "focus"]).is_err()); // missing direction
+}
+
+#[test]
+fn test_parse_direction_all() {
+    assert!(matches!(parse_direction("north"), Ok(Direction::North)));
+    assert!(matches!(parse_direction("south"), Ok(Direction::South)));
+    assert!(matches!(parse_direction("east"), Ok(Direction::East)));
+    assert!(matches!(parse_direction("west"), Ok(Direction::West)));
+    assert!(matches!(parse_direction("first"), Ok(Direction::First)));
+    assert!(matches!(parse_direction("last"), Ok(Direction::Last)));
+    assert!(parse_direction("invalid").is_err());
+}
+
+#[test]
+fn test_parse_direction_case_sensitive() {
+    assert!(parse_direction("North").is_err());
+    assert!(parse_direction("EAST").is_err());
+    assert!(parse_direction("").is_err());
+    assert!(parse_direction("northwest").is_err());
+}
+
+#[test]
+fn test_parse_modifiers_single() {
+    let m = parse_modifiers("ctrl").unwrap();
+    assert!(m.contains(Modifiers::CTRL));
+    assert!(!m.contains(Modifiers::ALT));
+}
+
+#[test]
+fn test_parse_modifiers_combined() {
+    let m = parse_modifiers("ctrl+alt").unwrap();
+    assert!(m.contains(Modifiers::CTRL));
+    assert!(m.contains(Modifiers::ALT));
+    assert!(!m.contains(Modifiers::SHIFT));
+}
+
+#[test]
+fn test_parse_modifiers_all() {
+    let m = parse_modifiers("ctrl+alt+shift+cmd").unwrap();
+    assert!(m.contains(Modifiers::CTRL));
+    assert!(m.contains(Modifiers::ALT));
+    assert!(m.contains(Modifiers::SHIFT));
+    assert!(m.contains(Modifiers::CMD));
+}
+
+#[test]
+fn test_parse_modifiers_invalid() {
+    assert!(parse_modifiers("super").is_err());
+    assert!(parse_modifiers("ctrl+meta").is_err());
+    assert!(parse_modifiers("").is_err());
+}
+
+#[test]
+fn test_parse_operation_missing_args() {
+    assert!(parse_operation(&["focus"]).is_err());
+    assert!(parse_operation(&["swap"]).is_err());
+    assert!(parse_operation(&["resize_to", "800"]).is_err());
+    assert!(parse_operation(&["move_to", "100"]).is_err());
+    assert!(parse_operation(&["focus_id"]).is_err());
+}
+
+#[test]
+fn test_parse_operation_invalid_numeric_args() {
+    assert!(parse_operation(&["focus_id", "abc"]).is_err());
+    assert!(parse_operation(&["resize_to", "abc", "600"]).is_err());
+    assert!(parse_operation(&["resize_to", "800", "abc"]).is_err());
+    assert!(parse_operation(&["move_to", "abc", "200"]).is_err());
+}
+
+#[test]
+fn test_parse_operation_empty() {
+    assert!(parse_operation(&[]).is_err());
+}
+
+#[test]
+fn test_parse_command_empty() {
+    assert!(parse_command(&[]).is_err());
+}
+
+#[test]
+fn test_parse_mouse_move_invalid() {
+    assert!(parse_command(&["mouse", "invalid"]).is_err());
+    assert!(parse_command(&["mouse"]).is_err());
+}
+
+#[test]
+fn test_json_merge() {
+    let mut target = serde_json::json!({"a": 1, "b": {"c": 2, "d": 3}});
+    let patch = serde_json::json!({"b": {"c": 99}, "e": 5});
+    json_merge(&mut target, &patch);
+    assert_eq!(target["a"], 1);
+    assert_eq!(target["b"]["c"], 99);
+    assert_eq!(target["b"]["d"], 3);
+    assert_eq!(target["e"], 5);
 }

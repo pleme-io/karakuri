@@ -293,7 +293,7 @@ pub fn setup_bevy_app(
             SnapshotPlugin,
         ));
 
-    let mut platform_callbacks = PlatformCallbacks::new(sender);
+    let mut platform_callbacks = PlatformCallbacks::new(sender)?;
     platform_callbacks.setup_handlers()?;
     let overlay_manager = OverlayManager::new(platform_callbacks.main_thread_marker);
     app.insert_non_send_resource(platform_callbacks);

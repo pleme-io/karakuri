@@ -37,18 +37,24 @@ pub enum Direction {
 pub enum Operation {
     /// Focuses on a window in the specified `Direction`.
     Focus(Direction),
+    /// Focuses a specific window by its platform window ID.
+    FocusById(i32),
     /// Swaps the current window with another in the specified `Direction`.
     Swap(Direction),
     /// Centers the currently focused window on the display.
     Center,
     /// Resizes the focused window.
     Resize,
+    /// Resizes the focused window to exact pixel dimensions.
+    ResizeTo(i32, i32),
     /// Toggles the focused window to full width or a preset width.
     FullWidth,
     /// Moves the focused window to the next available display.
     ToNextDisplay,
     /// Moves the focused window to the display in the given direction.
     ToDisplay(Direction),
+    /// Moves the focused window to an exact position.
+    MoveTo(i32, i32),
     /// Distributes heights equally among windows in the focused stack.
     Equalize,
     /// Toggles the managed state of the focused window.
@@ -76,6 +82,10 @@ pub enum Command {
     PrintState,
     /// Execute an arbitrary shell command (e.g., `open -a Raycast`).
     Exec(String),
+    /// Switch the window management mode (tiling/floating).
+    SetMode(String),
+    /// Reload config from disk.
+    ReloadConfig,
 }
 
 /// Find the nearest display in the given direction from `active_bounds`.
@@ -110,6 +120,12 @@ pub fn register_commands(app: &mut bevy::app::App) {
             command_move_focus,
             command_swap_focus,
             exec_command_handler,
+            focus_by_id_handler,
+            move_to_handler,
+            resize_to_handler,
+            set_mode_handler,
+            reload_config_handler,
+            config_patch_handler,
         ),
     );
 }
@@ -599,7 +615,8 @@ fn to_next_display(
             dir = match op {
                 Operation::ToDisplay(d) => Some(Some(d.clone())),
                 Operation::ToNextDisplay => Some(None),
-                _ => unreachable!(),
+                // filter_window_operations only yields ToNextDisplay | ToDisplay
+                _ => unreachable!("filter guarantees only display operations"),
             };
         }
         let Some(direction) = dir else { return };
@@ -797,7 +814,10 @@ fn equalize_column(
 
     if let Column::Stack(stack) = column {
         #[allow(clippy::cast_precision_loss)]
-        let equal_height = active_display.bounds().height() / i32::try_from(stack.len()).unwrap();
+        let Ok(count) = i32::try_from(stack.len()) else {
+            return;
+        };
+        let equal_height = active_display.bounds().height() / count;
 
         for &entity in &stack {
             if let Some(window) = windows.get(entity) {
@@ -840,6 +860,124 @@ pub fn stack_windows_handler(
             _ = strip.unstack(entity);
         }
         reshuffle_around(entity, &mut commands);
+    }
+}
+
+/// Focuses a specific window by its platform window ID.
+#[allow(clippy::needless_pass_by_value)]
+fn focus_by_id_handler(
+    mut messages: MessageReader<Event>,
+    windows: Windows,
+    apps: Query<&Application>,
+    mut commands: Commands,
+) {
+    let Some(Operation::FocusById(target_id)) =
+        filter_window_operations(&mut messages, |op| matches!(op, Operation::FocusById(_))).next()
+    else {
+        return;
+    };
+    let target_id = *target_id;
+
+    if let Some((window, entity)) = windows.iter().find(|(w, _)| w.id() == target_id) {
+        if let Some(psn) = windows.psn(window.id(), &apps) {
+            window.focus_with_raise(psn);
+        }
+        reshuffle_around(entity, &mut commands);
+    }
+}
+
+/// Moves the focused window to an exact position.
+#[allow(clippy::needless_pass_by_value)]
+fn move_to_handler(
+    mut messages: MessageReader<Event>,
+    current_focus: Single<(&Window, Entity), With<FocusedMarker>>,
+    active_display: ActiveDisplay,
+    mut commands: Commands,
+) {
+    let Some(Operation::MoveTo(x, y)) =
+        filter_window_operations(&mut messages, |op| matches!(op, Operation::MoveTo(_, _))).next()
+    else {
+        return;
+    };
+    let (x, y) = (*x, *y);
+    let (_, entity) = *current_focus;
+    reposition_entity(entity, Origin::new(x, y), active_display.id(), &mut commands);
+    reshuffle_around(entity, &mut commands);
+}
+
+/// Resizes the focused window to exact pixel dimensions.
+#[allow(clippy::needless_pass_by_value)]
+fn resize_to_handler(
+    mut messages: MessageReader<Event>,
+    current_focus: Single<(&Window, Entity), With<FocusedMarker>>,
+    active_display: ActiveDisplay,
+    mut commands: Commands,
+) {
+    let Some(Operation::ResizeTo(w, h)) =
+        filter_window_operations(&mut messages, |op| matches!(op, Operation::ResizeTo(_, _))).next()
+    else {
+        return;
+    };
+    let (w, h) = (*w, *h);
+    let (_, entity) = *current_focus;
+    resize_entity(entity, Size::new(w, h), active_display.id(), &mut commands);
+    reshuffle_around(entity, &mut commands);
+}
+
+/// Sets the window management mode (tiling/floating).
+#[allow(clippy::needless_pass_by_value)]
+fn set_mode_handler(
+    mut messages: MessageReader<Event>,
+    config: Res<Config>,
+) {
+    for event in messages.read() {
+        if let Event::Command {
+            command: Command::SetMode(mode),
+        } = event
+        {
+            let mode_value = match mode.as_str() {
+                "floating" => serde_json::json!({ "mode": "floating" }),
+                _ => serde_json::json!({ "mode": "tiling" }),
+            };
+            if let Err(e) = config.apply_patch(&mode_value) {
+                error!("set_mode: {e}");
+            }
+        }
+    }
+}
+
+/// Handles reload_config commands by triggering a config file reload.
+#[allow(clippy::needless_pass_by_value)]
+fn reload_config_handler(
+    mut messages: MessageReader<Event>,
+    mut config: ResMut<Config>,
+) {
+    for event in messages.read() {
+        match event {
+            Event::Command { command: Command::ReloadConfig } | Event::ConfigReload => {
+                info!("reload_config: reloading from disk");
+                if let Err(e) = config.reload_config(crate::config::CONFIGURATION_FILE.as_path()) {
+                    error!("reload_config: {e}");
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Handles dynamic config patches from MCP set_config.
+#[allow(clippy::needless_pass_by_value)]
+fn config_patch_handler(
+    mut messages: MessageReader<Event>,
+    config: Res<Config>,
+) {
+    for event in messages.read() {
+        if let Event::ConfigPatch(patch) = event {
+            info!("config_patch: applying {patch}");
+            if let Err(e) = config.apply_patch(patch) {
+                error!("config_patch: {e}");
+            }
+        }
     }
 }
 

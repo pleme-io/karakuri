@@ -373,10 +373,10 @@ impl WindowManagerApi for WindowManagerOS {
         if count < 1 {
             return vec![];
         }
-        let mut displays = Vec::with_capacity(count.try_into().unwrap());
+        let mut displays = Vec::with_capacity(count as usize);
         unsafe {
             CGGetActiveDisplayList(count, displays.as_mut_ptr(), &raw mut count);
-            displays.set_len(count.try_into().unwrap());
+            displays.set_len(count as usize);
         }
         displays
             .into_iter()
@@ -784,11 +784,17 @@ pub fn bruteforce_windows(pid: Pid, mut window_list: Vec<WinID>) -> Vec<Window> 
 /// `true` if Accessibility privileges are granted, `false` otherwise.
 pub fn check_ax_privilege() -> bool {
     unsafe {
-        let keys = [kAXTrustedCheckOptionPrompt
+        let Some(prompt_key) = kAXTrustedCheckOptionPrompt
             .cast::<CFString>()
             .as_ref()
-            .unwrap()];
-        let values = [kCFBooleanTrue.unwrap()];
+        else {
+            return false;
+        };
+        let Some(true_val) = kCFBooleanTrue else {
+            return false;
+        };
+        let keys = [prompt_key];
+        let values = [true_val];
         let opts = CFDictionary::from_slices(&keys, &values);
         AXIsProcessTrustedWithOptions((&raw const *opts).cast())
     }

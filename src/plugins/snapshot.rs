@@ -54,9 +54,11 @@ fn sync_snapshot(
 
     let mut display_snapshots = Vec::new();
     let mut focused_window_snapshot = None;
+    let mut all_windows_flat = Vec::new();
 
     for (display, display_entity, is_active, dock) in &displays {
         let mut workspace_snapshots = Vec::new();
+        let disp_id = display.id();
 
         for (strip, _ws_entity, child, ws_active) in &workspaces {
             if child.parent() != display_entity {
@@ -79,6 +81,9 @@ fn sync_snapshot(
                         .unwrap_or_default();
 
                     let is_focused = focused_entity.is_some_and(|f| f == win_entity);
+                    let is_stacked = strip.index_of(win_entity).ok()
+                        .and_then(|idx| strip.get(idx).ok())
+                        .is_some_and(|col| matches!(col, crate::manager::Column::Stack(_)));
                     let frame = window.frame();
                     let snap = WindowSnapshot {
                         id: window.id(),
@@ -94,29 +99,27 @@ fn sync_snapshot(
                         is_focused,
                         is_unmanaged: unmanaged.is_some(),
                         is_full_width: full_width.is_some(),
+                        is_stacked,
+                        display_id: disp_id,
+                        workspace_id: strip.id(),
                     };
 
                     if is_focused {
                         focused_window_snapshot = Some(snap.clone());
                     }
+                    all_windows_flat.push(snap.clone());
                     win_snapshots.push(snap);
                 }
             }
 
-            // Also include floating/unmanaged windows not in the strip
-            // (in floating mode, windows are removed from the strip but
-            // still exist as entities parented to an Application).
+            // Also include floating/unmanaged windows not in the strip.
             if ws_active {
                 for (window, win_entity, win_child, unmanaged, full_width) in &windows {
                     if seen_entities.contains(&win_entity) || unmanaged.is_none() {
                         continue;
                     }
-                    // Check that this window's Application is parented to this display.
                     let app_entity = win_child.parent();
                     if let Ok(app_child) = apps.get(app_entity) {
-                        // Application doesn't have ChildOf<Display> — we can't filter
-                        // by display here. Include all floating windows on the active
-                        // workspace only.
                         let bundle_id = app_child
                             .bundle_id()
                             .map(str::to_owned)
@@ -138,11 +141,15 @@ fn sync_snapshot(
                             is_focused,
                             is_unmanaged: true,
                             is_full_width: full_width.is_some(),
+                            is_stacked: false,
+                            display_id: disp_id,
+                            workspace_id: strip.id(),
                         };
 
                         if is_focused {
                             focused_window_snapshot = Some(snap.clone());
                         }
+                        all_windows_flat.push(snap.clone());
                         win_snapshots.push(snap);
                     }
                 }
@@ -180,9 +187,12 @@ fn sync_snapshot(
     }
 
     let options = config.options();
+    let full_config = config.options_json();
     let snapshot = StateSnapshot {
         displays: display_snapshots,
         focused_window: focused_window_snapshot,
+        all_windows: all_windows_flat,
+        full_config,
         config_flags: ConfigFlags {
             mode: match options.mode {
                 crate::config::WindowMode::Tiling => "tiling".to_string(),

@@ -259,6 +259,86 @@ mod tests {
     }
 
     #[test]
+    fn overdamped_converges_without_overshoot() {
+        let params = SpringParams {
+            stiffness: 800.0,
+            damping_ratio: 2.0,
+            epsilon: 0.5,
+        };
+        let mut spring = SpringAxis::default();
+        let target = 500.0;
+        let mut pos = 0.0;
+        let dt = 1.0 / 60.0;
+        let mut max_pos = 0.0_f64;
+
+        for _ in 0..600 {
+            let (new_pos, settled) = step(pos, target, &mut spring, &params, dt);
+            max_pos = max_pos.max(new_pos);
+            pos = new_pos;
+            if settled {
+                break;
+            }
+        }
+
+        assert!(
+            (pos - target).abs() < params.epsilon,
+            "overdamped should converge: pos={pos}, target={target}"
+        );
+        assert!(
+            max_pos <= target + params.epsilon,
+            "overdamped should not overshoot: max={max_pos}, target={target}"
+        );
+    }
+
+    #[test]
+    fn large_displacement_converges() {
+        let params = default_params();
+        let mut spring = SpringAxis::default();
+        let target = 10000.0;
+        let mut pos = 0.0;
+        let dt = 1.0 / 60.0;
+
+        for _ in 0..600 {
+            let (new_pos, settled) = step(pos, target, &mut spring, &params, dt);
+            pos = new_pos;
+            if settled {
+                break;
+            }
+        }
+
+        assert!(
+            (pos - target).abs() < params.epsilon,
+            "should converge for large displacement: pos={pos}"
+        );
+    }
+
+    #[test]
+    fn small_epsilon_still_converges() {
+        let params = SpringParams {
+            stiffness: 800.0,
+            damping_ratio: 1.0,
+            epsilon: 0.01,
+        };
+        let mut spring = SpringAxis::default();
+        let target = 100.0;
+        let mut pos = 0.0;
+        let dt = 1.0 / 60.0;
+
+        for _ in 0..600 {
+            let (new_pos, settled) = step(pos, target, &mut spring, &params, dt);
+            pos = new_pos;
+            if settled {
+                break;
+            }
+        }
+
+        assert!(
+            (pos - target).abs() < params.epsilon,
+            "should converge with small epsilon: pos={pos}"
+        );
+    }
+
+    #[test]
     fn negative_direction_works() {
         let params = default_params();
         let mut spring = SpringAxis::default();

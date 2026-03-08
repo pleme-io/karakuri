@@ -15,18 +15,6 @@ pub fn smooth_velocity(new_velocity: f64, old_velocity: f64) -> f64 {
     0.3 * new_velocity + 0.7 * old_velocity
 }
 
-/// Applies one frame of exponential decay to a velocity value.
-///
-/// Models friction/inertia: `velocity * e^(-decay_rate * dt)`.
-///
-/// # Arguments
-/// - `velocity` — current velocity (normalized units/sec)
-/// - `decay_rate` — deceleration factor (higher = faster stop, 1.0–10.0)
-/// - `dt` — frame delta time in seconds
-pub fn decay_velocity(velocity: f64, decay_rate: f64, dt: f64) -> f64 {
-    velocity * (-decay_rate * dt).exp()
-}
-
 /// Converts a normalized velocity into a pixel shift for one frame.
 ///
 /// # Arguments
@@ -105,13 +93,6 @@ pub fn delta_to_shift(
     (f64::from(display_width) * scaled * direction_modifier) as i32
 }
 
-/// Returns true if a swipe delta is below the display's minimum resolution
-/// and should be ignored.
-pub fn below_swipe_resolution(delta: f64, display_width: i32) -> bool {
-    let resolution = 1.0 / f64::from(display_width);
-    delta.abs() < resolution
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -141,33 +122,6 @@ mod tests {
     }
 
     // ── decay_velocity ─────────────────────────────────────────────────
-
-    #[test]
-    fn decay_reduces_magnitude() {
-        let v = decay_velocity(10.0, 4.0, 1.0 / 60.0);
-        assert!(v < 10.0);
-        assert!(v > 0.0);
-    }
-
-    #[test]
-    fn decay_zero_dt_preserves_velocity() {
-        let v = decay_velocity(10.0, 4.0, 0.0);
-        assert!((v - 10.0).abs() < 1e-10);
-    }
-
-    #[test]
-    fn decay_high_rate_rapidly_decreases() {
-        let v_low = decay_velocity(10.0, 1.0, 1.0 / 60.0);
-        let v_high = decay_velocity(10.0, 10.0, 1.0 / 60.0);
-        assert!(v_high < v_low);
-    }
-
-    #[test]
-    fn decay_negative_velocity_approaches_zero() {
-        let v = decay_velocity(-10.0, 4.0, 1.0 / 60.0);
-        assert!(v > -10.0);
-        assert!(v < 0.0);
-    }
 
     // ── velocity_to_pixel_shift ────────────────────────────────────────
 
@@ -271,35 +225,18 @@ mod tests {
 
     // ── below_swipe_resolution ─────────────────────────────────────────
 
-    #[test]
-    fn tiny_delta_below_resolution() {
-        assert!(below_swipe_resolution(0.0001, 1920));
-    }
-
-    #[test]
-    fn normal_delta_above_resolution() {
-        assert!(!below_swipe_resolution(0.01, 1920));
-    }
-
-    #[test]
-    fn exact_resolution_boundary() {
-        let resolution = 1.0 / 1920.0;
-        assert!(below_swipe_resolution(resolution - 0.00001, 1920));
-        assert!(!below_swipe_resolution(resolution + 0.00001, 1920));
-    }
-
     // ── multi-step integration scenarios ──────────────────────────────
 
     #[test]
     fn full_inertia_sequence_stops() {
-        let mut velocity = 5.0;
-        let decay_rate = 4.0;
-        let dt = 1.0 / 60.0;
+        let mut velocity: f64 = 5.0;
+        let decay_rate: f64 = 4.0;
+        let dt: f64 = 1.0 / 60.0;
         let display_width = 1920;
 
         let mut frames = 0;
         while !below_stop_threshold(velocity, display_width, 100.0) {
-            velocity = decay_velocity(velocity, decay_rate, dt);
+            velocity *= (-decay_rate * dt).exp();
             frames += 1;
             assert!(frames < 1000, "inertia should stop within 1000 frames");
         }
@@ -352,10 +289,4 @@ mod tests {
         assert_eq!(shift, 0);
     }
 
-    #[test]
-    fn below_swipe_resolution_narrow_display() {
-        // On a 100px display, resolution = 0.01
-        assert!(below_swipe_resolution(0.005, 100));
-        assert!(!below_swipe_resolution(0.02, 100));
-    }
 }

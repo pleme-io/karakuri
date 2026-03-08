@@ -343,7 +343,11 @@ impl WindowApi for WindowOS {
                 )
             };
             self.frame.max = self.frame.min + size;
-            self.width_ratio = f64::from(self.frame.width()) / f64::from(display_width);
+            self.width_ratio = if display_width > 0 {
+                f64::from(self.frame.width()) / f64::from(display_width)
+            } else {
+                1.0
+            };
         }
     }
 
@@ -404,7 +408,12 @@ impl WindowApi for WindowOS {
         self.frame.max.x += self.horizontal_padding;
         self.frame.max.y += self.vertical_padding;
 
-        self.width_ratio = f64::from(self.frame.width()) / f64::from(display_bounds.width());
+        let dw = display_bounds.width();
+        self.width_ratio = if dw > 0 {
+            f64::from(self.frame.width()) / f64::from(dw)
+        } else {
+            1.0
+        };
         Ok(())
     }
 

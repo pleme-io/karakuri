@@ -45,7 +45,7 @@ pub type CFStringRef = *const CFString;
 pub type WorkspaceId = u64;
 
 bitflags::bitflags! {
-    #[derive(Debug, PartialEq)]
+    #[derive(Debug, Clone, Copy, PartialEq)]
     pub struct Modifiers: u8 {
         const ALT     = 1 << 0;
         const SHIFT   = 1 << 1;
@@ -155,19 +155,21 @@ impl PlatformCallbacks {
     /// # Returns
     ///
     /// `Ok(std::pin::Pin<Box<Self>>)` if the instance is created successfully, otherwise `Err(Error)`.
-    pub fn new(events: EventSender) -> Pin<Box<Self>> {
+    pub fn new(events: EventSender) -> Result<Pin<Box<Self>>> {
         // This is required to receive some Cocoa notifications into Carbon code, like
         // NSWorkspaceActiveSpaceDidChangeNotification and
         // NSWorkspaceActiveDisplayDidChangeNotification
         // Found on: https://stackoverflow.com/questions/68893386/unable-to-receive-nsworkspaceactivespacedidchangenotification-specifically-but
-        let main_thread_marker = MainThreadMarker::new().unwrap();
+        let Some(main_thread_marker) = MainThreadMarker::new() else {
+            return Err(Error::Generic("must be called from the main thread".into()));
+        };
         let cocoa_app = NSApplication::sharedApplication(main_thread_marker);
         cocoa_app.setActivationPolicy(NSApplicationActivationPolicy::Accessory);
         cocoa_app.finishLaunching();
         NSApplication::load();
 
         let workspace_observer = WorkspaceObserver::new(events.clone());
-        Box::pin(PlatformCallbacks {
+        Ok(Box::pin(PlatformCallbacks {
             main_thread_marker,
             cocoa_app,
             process_handler: None,
@@ -176,7 +178,7 @@ impl PlatformCallbacks {
             mission_control_observer: MissionControlHandler::new(events.clone()),
             display_handler: None,
             events,
-        })
+        }))
     }
 
     /// Sets up and starts all platform-specific handlers, including input, display, Mission Control, workspace, and process handlers.
