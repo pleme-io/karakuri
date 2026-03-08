@@ -174,7 +174,7 @@ Exposes five tools: `get_state`, `get_focused`, `get_displays`, `get_config`, an
 
 Ayatsuri searches for configuration in order:
 
-1. `$KARAKURI_CONFIG` environment variable
+1. `$AYATSURI_CONFIG` environment variable
 2. `$XDG_CONFIG_HOME/ayatsuri/ayatsuri.yaml` (preferred YAML format)
 3. `$XDG_CONFIG_HOME/ayatsuri/ayatsuri.toml`
 4. `$HOME/.ayatsuri.toml`
