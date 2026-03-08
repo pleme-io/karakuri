@@ -6,7 +6,7 @@ use derive_more::{DerefMut, with_trait::Deref};
 use notify::{RecursiveMode, Watcher};
 use objc2_core_foundation::{
     CFArray, CFDictionary, CFMutableData, CFNumber, CFNumberType, CFRetained, CFString, CGPoint,
-    CGRect, CGSize, kCFBooleanTrue,
+    CGRect, CGSize, kCFBooleanFalse,
 };
 use objc2_core_graphics::{
     CGDirectDisplayID, CGDisplayBounds, CGError, CGGetActiveDisplayList, CGRectContainsPoint,
@@ -788,7 +788,7 @@ pub fn check_ax_privilege() -> bool {
             .cast::<CFString>()
             .as_ref()
             .unwrap()];
-        let values = [kCFBooleanTrue.unwrap()];
+        let values = [kCFBooleanFalse.unwrap()];
         let opts = CFDictionary::from_slices(&keys, &values);
         AXIsProcessTrustedWithOptions((&raw const *opts).cast())
     }

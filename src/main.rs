@@ -108,9 +108,19 @@ fn main() -> Result<()> {
     match Karakuri::parse().subcmd.unwrap_or_default() {
         SubCmd::Launch => {
             let (sender, receiver) = EventSender::new();
-            let (mut app, shared_state) = setup_bevy_app(sender.clone(), receiver)?;
-            CommandReader::new(sender, shared_state).start();
-            app.run();
+            match setup_bevy_app(sender.clone(), receiver) {
+                Ok((mut app, shared_state)) => {
+                    CommandReader::new(sender, shared_state).start();
+                    app.run();
+                }
+                Err(errors::Error::PermissionDenied(msg)) => {
+                    eprintln!("Permission denied: {msg}");
+                    eprintln!("Grant accessibility access in System Settings → Privacy & Security → Accessibility, then restart karakuri.");
+                    // Exit 0 so launchd KeepAlive doesn't restart in a loop.
+                    return Ok(());
+                }
+                Err(e) => return Err(e),
+            }
         }
         SubCmd::Install => service()?.install()?,
         SubCmd::Uninstall => service()?.uninstall()?,
