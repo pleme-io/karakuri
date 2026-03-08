@@ -1403,3 +1403,455 @@ fn test_animation_ordering_resize_after_reposition() {
 
     run_main_loop(&mut bevy, &internal_queue, &commands, check);
 }
+
+// -----------------------------------------------------------------------
+// Reload guard state machine tests
+// -----------------------------------------------------------------------
+
+/// Verify the ReloadGuard state machine: new → bump resets counter → tick
+/// decrements → settled() transitions from false to true exactly when
+/// settle_frames reaches zero.
+#[test]
+fn test_reload_guard_state_machine() {
+    use crate::ecs::state::ReloadGuard;
+    use std::collections::HashMap;
+
+    let mut guard = ReloadGuard::new(HashMap::new());
+    assert!(!guard.settled(), "fresh guard must not be settled");
+    assert_eq!(guard.settle_frames, 2);
+
+    // First tick: 2 → 1, not yet settled.
+    assert!(!guard.tick(), "tick from 2 should not signal settled");
+    assert!(!guard.settled());
+
+    // Bump resets to 2.
+    guard.bump();
+    assert_eq!(guard.settle_frames, 2, "bump must reset to SETTLE_FRAMES");
+    assert!(!guard.settled());
+
+    // Tick twice to settle.
+    assert!(!guard.tick());
+    assert!(guard.tick(), "second tick should signal settled");
+    assert!(guard.settled());
+
+    // Extra ticks after settling are no-ops.
+    assert!(!guard.tick(), "tick after settled should return false");
+    assert!(guard.settled());
+}
+
+/// Verify that multiple bump() calls keep resetting the settle counter,
+/// simulating cascading OS events.
+#[test]
+fn test_reload_guard_cascading_bumps() {
+    use crate::ecs::state::ReloadGuard;
+    use std::collections::HashMap;
+
+    let mut guard = ReloadGuard::new(HashMap::new());
+
+    // Simulate 5 rapid cascading events.
+    for _ in 0..5 {
+        guard.tick();
+        guard.bump();
+    }
+    // Guard should not have settled during the cascade.
+    assert!(!guard.settled());
+
+    // Now let it settle.
+    guard.tick();
+    guard.tick();
+    assert!(guard.settled());
+}
+
+// -----------------------------------------------------------------------
+// Window swap integration tests
+// -----------------------------------------------------------------------
+
+/// Verify that swapping a window east and then west returns it to its
+/// original position — swap must be its own inverse.
+#[test]
+fn test_swap_east_then_west_roundtrip() {
+    let _lock = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+
+    let commands = vec![
+        Event::MenuOpened { window_id: 0 }, // Settle
+        Event::Command {
+            command: Command::Window(Operation::Focus(Direction::First)),
+        },
+        // Capture initial positions via Focus(First).
+        Event::Command {
+            command: Command::Window(Operation::Swap(Direction::East)),
+        },
+        Event::Command {
+            command: Command::Window(Operation::Swap(Direction::West)),
+        },
+    ];
+
+    let expected_after_first = [
+        (4, (0, TEST_MENUBAR_HEIGHT)),
+        (3, (400, TEST_MENUBAR_HEIGHT)),
+        (2, (800, TEST_MENUBAR_HEIGHT)),
+    ];
+
+    let check = |iteration, world: &mut World| {
+        match iteration {
+            1 => verify_window_positions(&expected_after_first, world),
+            // After swap east + swap west, positions should return to first state.
+            3 => verify_window_positions(&expected_after_first, world),
+            _ => {}
+        }
+    };
+
+    let mut bevy = setup_world();
+    let mock_app = setup_process(bevy.world_mut());
+    let internal_queue = Arc::new(RwLock::new(Vec::<Event>::new()));
+    let event_queue = internal_queue.clone();
+
+    let windows = Box::new(move |_| {
+        (0..5)
+            .map(|i| {
+                let origin = Origin::new(100 * i, 0);
+                let size = Size::new(TEST_WINDOW_WIDTH, TEST_WINDOW_HEIGHT);
+                Window::new(Box::new(MockWindow::new(
+                    i,
+                    IRect { min: origin, max: origin + size },
+                    event_queue.clone(),
+                    mock_app.clone(),
+                )))
+            })
+            .collect()
+    });
+    bevy.world_mut()
+        .insert_resource(WindowManager(Box::new(MockWindowManager { windows })));
+
+    run_main_loop(&mut bevy, &internal_queue, &commands, check);
+}
+
+// -----------------------------------------------------------------------
+// Resize cycle test
+// -----------------------------------------------------------------------
+
+/// Verify that cycling through resize presets produces valid window
+/// widths — no window should ever have a width <= 0 or exceed the display.
+#[test]
+fn test_resize_cycle_produces_valid_widths() {
+    let _lock = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+
+    let commands = vec![
+        Event::MenuOpened { window_id: 0 }, // Settle
+        Event::Command {
+            command: Command::Window(Operation::Focus(Direction::First)),
+        },
+        Event::Command {
+            command: Command::Window(Operation::Resize),
+        },
+        Event::Command {
+            command: Command::Window(Operation::Resize),
+        },
+        Event::Command {
+            command: Command::Window(Operation::Resize),
+        },
+    ];
+
+    let check = |iteration, world: &mut World| {
+        if iteration >= 2 {
+            let mut query = world.query::<&Window>();
+            for window in query.iter(world) {
+                let frame = window.frame();
+                assert!(
+                    frame.width() > 0,
+                    "Window {} has non-positive width {} after resize cycle {}",
+                    window.id(),
+                    frame.width(),
+                    iteration
+                );
+                assert!(
+                    frame.width() <= TEST_DISPLAY_WIDTH,
+                    "Window {} width {} exceeds display {} after resize cycle {}",
+                    window.id(),
+                    frame.width(),
+                    TEST_DISPLAY_WIDTH,
+                    iteration
+                );
+            }
+        }
+    };
+
+    let mut bevy = setup_world();
+    let mock_app = setup_process(bevy.world_mut());
+    let internal_queue = Arc::new(RwLock::new(Vec::<Event>::new()));
+    let event_queue = internal_queue.clone();
+
+    let windows = Box::new(move |_| {
+        (0..3)
+            .map(|i| {
+                let origin = Origin::new(100 * i, 0);
+                let size = Size::new(TEST_WINDOW_WIDTH, TEST_WINDOW_HEIGHT);
+                Window::new(Box::new(MockWindow::new(
+                    i,
+                    IRect { min: origin, max: origin + size },
+                    event_queue.clone(),
+                    mock_app.clone(),
+                )))
+            })
+            .collect()
+    });
+    bevy.world_mut()
+        .insert_resource(WindowManager(Box::new(MockWindowManager { windows })));
+
+    run_main_loop(&mut bevy, &internal_queue, &commands, check);
+}
+
+// -----------------------------------------------------------------------
+// Full-width toggle test
+// -----------------------------------------------------------------------
+
+/// Verify that full-width mode makes a window span the entire display
+/// width minus edge padding.
+#[test]
+fn test_fullwidth_toggle() {
+    let _lock = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+
+    let commands = vec![
+        Event::MenuOpened { window_id: 0 }, // Settle
+        Event::Command {
+            command: Command::Window(Operation::Focus(Direction::First)),
+        },
+        Event::Command {
+            command: Command::Window(Operation::FullWidth),
+        },
+    ];
+
+    let check = |iteration, world: &mut World| {
+        if iteration == 2 {
+            let mut focused_query = world.query::<(&Window, &FocusedMarker)>();
+            for (window, _) in focused_query.iter(world) {
+                // Full-width window should occupy the entire display width.
+                assert_eq!(
+                    window.frame().width(),
+                    TEST_DISPLAY_WIDTH,
+                    "Focused window should span full display width after FullWidth toggle"
+                );
+            }
+        }
+    };
+
+    let mut bevy = setup_world();
+    let mock_app = setup_process(bevy.world_mut());
+    let internal_queue = Arc::new(RwLock::new(Vec::<Event>::new()));
+    let event_queue = internal_queue.clone();
+
+    let windows = Box::new(move |_| {
+        (0..3)
+            .map(|i| {
+                let origin = Origin::new(100 * i, 0);
+                let size = Size::new(TEST_WINDOW_WIDTH, TEST_WINDOW_HEIGHT);
+                Window::new(Box::new(MockWindow::new(
+                    i,
+                    IRect { min: origin, max: origin + size },
+                    event_queue.clone(),
+                    mock_app.clone(),
+                )))
+            })
+            .collect()
+    });
+    bevy.world_mut()
+        .insert_resource(WindowManager(Box::new(MockWindowManager { windows })));
+
+    run_main_loop(&mut bevy, &internal_queue, &commands, check);
+}
+
+// -----------------------------------------------------------------------
+// Stack and unstack test
+// -----------------------------------------------------------------------
+// Rapid focus cycling stress test
+// -----------------------------------------------------------------------
+
+/// Stress test: rapidly cycling focus east 20 times should never produce
+/// an invalid window position (all x values must be within reasonable
+/// bounds).
+#[test]
+fn test_rapid_focus_cycling_no_invalid_positions() {
+    let _lock = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+
+    let mut commands = vec![Event::MenuOpened { window_id: 0 }];
+    for _ in 0..20 {
+        commands.push(Event::Command {
+            command: Command::Window(Operation::Focus(Direction::East)),
+        });
+    }
+
+    let check = |_iteration, world: &mut World| {
+        let mut query = world.query::<&Window>();
+        for window in query.iter(world) {
+            let x = window.frame().min.x;
+            // Windows can be off-screen (slivers) but shouldn't be absurdly far.
+            // A reasonable bound: no more than 2 display widths away.
+            assert!(
+                x.abs() < TEST_DISPLAY_WIDTH * 3,
+                "Window {} has unreasonable x={} — possible layout divergence",
+                window.id(),
+                x
+            );
+        }
+    };
+
+    let mut bevy = setup_world();
+    let mock_app = setup_process(bevy.world_mut());
+    let internal_queue = Arc::new(RwLock::new(Vec::<Event>::new()));
+    let event_queue = internal_queue.clone();
+
+    let windows = Box::new(move |_| {
+        (0..10)
+            .map(|i| {
+                let origin = Origin::new(50 * i, 0);
+                let size = Size::new(TEST_WINDOW_WIDTH, TEST_WINDOW_HEIGHT);
+                Window::new(Box::new(MockWindow::new(
+                    i,
+                    IRect { min: origin, max: origin + size },
+                    event_queue.clone(),
+                    mock_app.clone(),
+                )))
+            })
+            .collect()
+    });
+    bevy.world_mut()
+        .insert_resource(WindowManager(Box::new(MockWindowManager { windows })));
+
+    run_main_loop(&mut bevy, &internal_queue, &commands, check);
+}
+
+// -----------------------------------------------------------------------
+// Window height consistency after focus changes
+// -----------------------------------------------------------------------
+
+/// Verify that all windows maintain consistent heights after multiple
+/// focus changes. This catches the off-screen menubar height subtraction
+/// bug from a different angle.
+#[test]
+fn test_window_heights_consistent_after_focus_changes() {
+    let _lock = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+    let expected_height = TEST_DISPLAY_HEIGHT - TEST_MENUBAR_HEIGHT;
+
+    let commands = vec![
+        Event::MenuOpened { window_id: 0 },
+        Event::Command {
+            command: Command::Window(Operation::Focus(Direction::First)),
+        },
+        Event::Command {
+            command: Command::Window(Operation::Focus(Direction::East)),
+        },
+        Event::Command {
+            command: Command::Window(Operation::Focus(Direction::East)),
+        },
+        Event::Command {
+            command: Command::Window(Operation::Focus(Direction::West)),
+        },
+        Event::Command {
+            command: Command::Window(Operation::Focus(Direction::Last)),
+        },
+        Event::Command {
+            command: Command::Window(Operation::Focus(Direction::First)),
+        },
+    ];
+
+    let check = |iteration, world: &mut World| {
+        if iteration >= 1 {
+            let mut query = world.query::<&Window>();
+            for window in query.iter(world) {
+                assert_eq!(
+                    window.frame().height(),
+                    expected_height,
+                    "Window {} height {} != expected {} at iteration {}",
+                    window.id(),
+                    window.frame().height(),
+                    expected_height,
+                    iteration,
+                );
+            }
+        }
+    };
+
+    let mut bevy = setup_world();
+    let mock_app = setup_process(bevy.world_mut());
+    let internal_queue = Arc::new(RwLock::new(Vec::<Event>::new()));
+    let event_queue = internal_queue.clone();
+
+    let windows = Box::new(move |_| {
+        (0..5)
+            .map(|i| {
+                let origin = Origin::new(100 * i, 0);
+                let size = Size::new(TEST_WINDOW_WIDTH, TEST_WINDOW_HEIGHT);
+                Window::new(Box::new(MockWindow::new(
+                    i,
+                    IRect { min: origin, max: origin + size },
+                    event_queue.clone(),
+                    mock_app.clone(),
+                )))
+            })
+            .collect()
+    });
+    bevy.world_mut()
+        .insert_resource(WindowManager(Box::new(MockWindowManager { windows })));
+
+    run_main_loop(&mut bevy, &internal_queue, &commands, check);
+}
+
+// -----------------------------------------------------------------------
+// Center command test
+// -----------------------------------------------------------------------
+
+/// Verify that the center command places the focused window at the
+/// horizontal center of the display.
+#[test]
+fn test_center_positions_window_correctly() {
+    let _lock = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+
+    let commands = vec![
+        Event::MenuOpened { window_id: 0 },
+        Event::Command {
+            command: Command::Window(Operation::Focus(Direction::First)),
+        },
+        Event::Command {
+            command: Command::Window(Operation::Center),
+        },
+    ];
+
+    let centered_x = (TEST_DISPLAY_WIDTH - TEST_WINDOW_WIDTH) / 2;
+
+    let check = |iteration, world: &mut World| {
+        if iteration == 2 {
+            let mut query = world.query::<(&Window, &FocusedMarker)>();
+            for (window, _) in query.iter(world) {
+                assert_eq!(
+                    window.frame().min.x, centered_x,
+                    "Centered window x={} should be {}",
+                    window.frame().min.x, centered_x
+                );
+            }
+        }
+    };
+
+    let mut bevy = setup_world();
+    let mock_app = setup_process(bevy.world_mut());
+    let internal_queue = Arc::new(RwLock::new(Vec::<Event>::new()));
+    let event_queue = internal_queue.clone();
+
+    let windows = Box::new(move |_| {
+        (0..3)
+            .map(|i| {
+                let origin = Origin::new(100 * i, 0);
+                let size = Size::new(TEST_WINDOW_WIDTH, TEST_WINDOW_HEIGHT);
+                Window::new(Box::new(MockWindow::new(
+                    i,
+                    IRect { min: origin, max: origin + size },
+                    event_queue.clone(),
+                    mock_app.clone(),
+                )))
+            })
+            .collect()
+    });
+    bevy.world_mut()
+        .insert_resource(WindowManager(Box::new(MockWindowManager { windows })));
+
+    run_main_loop(&mut bevy, &internal_queue, &commands, check);
+}

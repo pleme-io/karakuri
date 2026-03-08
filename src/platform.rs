@@ -195,7 +195,7 @@ impl PlatformCallbacks {
     pub fn setup_handlers(&mut self) -> Result<()> {
         if !check_ax_privilege() {
             return Err(Error::PermissionDenied(
-                "Accessibility permissions are required. Please enable them in System Preferences -> Security & Privacy -> Privacy -> Accessibility.".to_string(),
+                "Accessibility permissions are required. Please enable them in System Settings → Privacy & Security → Accessibility.".to_string(),
             ));
         }
 
