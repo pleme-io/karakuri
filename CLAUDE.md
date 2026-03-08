@@ -1,4 +1,4 @@
-# Karakuri — Bevy ECS macOS Tiling Window Manager
+# Ayatsuri — Bevy ECS macOS Tiling Window Manager
 
 ## Build & Test
 
@@ -186,13 +186,13 @@ index back to get the Display.
 
 ## Patterns from the WM Ecosystem
 
-These patterns informed karakuri's design and should guide future changes:
+These patterns informed ayatsuri's design and should guide future changes:
 
 - **i3/sway**: Uniform container type, specification-driven command parser,
   two-phase render (compute geometry → batch platform calls)
 - **AeroSpace**: Tree normalization, immutable layout snapshots, minimal
   private API usage (only `_AXUIElementGetWindow`)
-- **Niri**: Scrollable tiling (viewport offset model — karakuri uses this),
+- **Niri**: Scrollable tiling (viewport offset model — ayatsuri uses this),
   spring physics for animation, per-monitor structural independence
 - **Komorebi**: `Ring<T>` focus tracking, three-channel event architecture,
   independent animation thread

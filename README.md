@@ -1,12 +1,12 @@
-# Karakuri
+# Ayatsuri
 
-A programmable macOS tiling window manager built on the Bevy ECS game engine. Karakuri arranges windows on a per-monitor infinite horizontal strip with support for vertical stacking, animated transitions, touchpad gestures, and full Rhai scripting. It also exposes an MCP server for live state inspection and command dispatch from Claude Code.
+A programmable macOS tiling window manager built on the Bevy ECS game engine. Ayatsuri arranges windows on a per-monitor infinite horizontal strip with support for vertical stacking, animated transitions, touchpad gestures, and full Rhai scripting. It also exposes an MCP server for live state inspection and command dispatch from Claude Code.
 
-Forked from [Paneru](https://github.com/karinushka/paneru), Karakuri retains the infinite-strip layout model while adding a scripting layer, a plugin architecture, and an MCP integration.
+Forked from [Paneru](https://github.com/karinushka/paneru), Ayatsuri retains the infinite-strip layout model while adding a scripting layer, a plugin architecture, and an MCP integration.
 
 ## Architecture
 
-Karakuri is structured as three decoupled layers connected by the Bevy ECS scheduler:
+Ayatsuri is structured as three decoupled layers connected by the Bevy ECS scheduler:
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
@@ -39,9 +39,9 @@ An `InteractionMode` FSM (Idle, Dragging, Swiping, MissionControl) gates system 
 
 - **Sliding tiling layout** -- windows arranged on an infinite horizontal strip per monitor
 - **Vertical stacking** -- stack multiple windows in a single column with equal-height distribution
-- **Rhai scripting** -- programmable hotkeys, event callbacks, and automation via `~/.config/karakuri/scripts/*.rhai`
+- **Rhai scripting** -- programmable hotkeys, event callbacks, and automation via `~/.config/ayatsuri/scripts/*.rhai`
 - **Bevy plugin architecture** -- modular plugins for clipboard, notifications, menu bar, overlays, and snapshots
-- **MCP server** -- live ECS state inspection and command dispatch for Claude Code (`karakuri mcp`)
+- **MCP server** -- live ECS state inspection and command dispatch for Claude Code (`ayatsuri mcp`)
 - **Focus follows mouse** -- optional mouse-driven focus tracking
 - **Touchpad gestures** -- four-finger swipe to scroll the window strip
 - **Animated transitions** -- interpolated repositioning with instant-snap during guards and swipes
@@ -67,8 +67,8 @@ An `InteractionMode` FSM (Idle, Dragging, Swiping, MissionControl) gates system 
 
 ```nix
 # flake.nix
-inputs.karakuri = {
-  url = "github:pleme-io/karakuri";
+inputs.ayatsuri = {
+  url = "github:pleme-io/ayatsuri";
   inputs.nixpkgs.follows = "nixpkgs";
 };
 ```
@@ -78,9 +78,9 @@ inputs.karakuri = {
 ```nix
 { inputs, ... }:
 {
-  imports = [ inputs.karakuri.homeManagerModules.default ];
+  imports = [ inputs.ayatsuri.homeManagerModules.default ];
 
-  services.karakuri = {
+  services.ayatsuri = {
     enable = true;
     settings = {
       options = {
@@ -112,8 +112,8 @@ inputs.karakuri = {
 ### Installing from Source
 
 ```bash
-git clone https://github.com/pleme-io/karakuri.git
-cd karakuri
+git clone https://github.com/pleme-io/ayatsuri.git
+cd ayatsuri
 cargo build --release
 cargo install --path .
 ```
@@ -123,25 +123,25 @@ cargo install --path .
 ### Running as a Service
 
 ```bash
-karakuri install    # Install launchd service
-karakuri start      # Start the service
-karakuri stop       # Stop the service
-karakuri restart    # Restart the service
-karakuri uninstall  # Remove the service
+ayatsuri install    # Install launchd service
+ayatsuri start      # Start the service
+ayatsuri stop       # Stop the service
+ayatsuri restart    # Restart the service
+ayatsuri uninstall  # Remove the service
 ```
 
 ### Running in the Foreground
 
 ```bash
-karakuri            # Launch directly (default subcommand)
+ayatsuri            # Launch directly (default subcommand)
 ```
 
 ### Sending Commands
 
-Control the running daemon via Unix socket (`/tmp/karakuri.socket`):
+Control the running daemon via Unix socket (`/tmp/ayatsuri.socket`):
 
 ```bash
-karakuri send-cmd <command> [args...]
+ayatsuri send-cmd <command> [args...]
 ```
 
 | Command                    | Description                                      |
@@ -158,27 +158,27 @@ karakuri send-cmd <command> [args...]
 | `window nextdisplay`       | Move window to the next display                  |
 | `mouse nextdisplay`        | Warp mouse to the next display                   |
 | `printstate`               | Print ECS state to the debug log                 |
-| `quit`                     | Quit Karakuri                                    |
+| `quit`                     | Quit Ayatsuri                                    |
 
 Directions: `west`, `east`, `north`, `south`, `first`, `last`.
 
 ### MCP Server (Claude Code Integration)
 
 ```bash
-karakuri mcp        # Start MCP server on stdio
+ayatsuri mcp        # Start MCP server on stdio
 ```
 
 Exposes five tools: `get_state`, `get_focused`, `get_displays`, `get_config`, and `send_command`.
 
 ## Configuration
 
-Karakuri searches for configuration in order:
+Ayatsuri searches for configuration in order:
 
 1. `$KARAKURI_CONFIG` environment variable
-2. `$XDG_CONFIG_HOME/karakuri/karakuri.yaml` (preferred YAML format)
-3. `$XDG_CONFIG_HOME/karakuri/karakuri.toml`
-4. `$HOME/.karakuri.toml`
-5. `$HOME/.karakuri`
+2. `$XDG_CONFIG_HOME/ayatsuri/ayatsuri.yaml` (preferred YAML format)
+3. `$XDG_CONFIG_HOME/ayatsuri/ayatsuri.toml`
+4. `$HOME/.ayatsuri.toml`
+5. `$HOME/.ayatsuri`
 
 Configuration changes are automatically hot-reloaded.
 
