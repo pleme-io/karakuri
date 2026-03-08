@@ -18,8 +18,8 @@ use tracing::{Level, debug, error, info, instrument, trace, warn};
 
 use super::{
     ActiveDisplayMarker, BProcess, ExistingMarker, FocusedMarker, FreshMarker,
-    PollForNotifications, RepositionMarker, ResizeMarker, SpawnWindowTrigger, Timeout,
-    WMEventTrigger,
+    PollForNotifications, RepositionMarker, ResizeMarker, SpawnWindowTrigger, SpringState,
+    Timeout, WMEventTrigger,
 };
 use crate::config::{Config, SwipeGestureDirection};
 use crate::ecs::params::{ActiveDisplay, Configuration, SmoothSwipeTracking, Windows};
@@ -694,42 +694,46 @@ pub(crate) fn workspace_change_watcher(
 #[allow(clippy::needless_pass_by_value)]
 #[instrument(level = Level::TRACE, skip_all)]
 pub(crate) fn animate_windows(
-    windows: Populated<(&mut Window, Entity, &RepositionMarker)>,
-    displays: Query<&Display>,
+    windows: Populated<(&mut Window, Entity, &RepositionMarker, Option<&mut SpringState>)>,
     swipe_tracker: SmoothSwipeTracking,
     reload_guard: Option<Res<ReloadGuard>>,
     time: Res<Time>,
-    config: Res<Config>,
     mut commands: Commands,
 ) {
-    let move_ratio = config.animation_speed() * time.delta_secs_f64();
-    let instant_snap = swipe_tracker.sliding() || reload_guard.is_some();
+    use crate::logic::spring::{self, SpringParams};
 
-    for (mut window, entity, RepositionMarker { origin, display_id }) in windows {
+    let dt = time.delta_secs_f64();
+    let instant_snap = swipe_tracker.sliding() || reload_guard.is_some();
+    let params = SpringParams::default(); // stiffness=800, damping=1.0
+
+    for (mut window, entity, RepositionMarker { origin, display_id: _ }, spring) in windows {
         if instant_snap {
             window.reposition(*origin);
+            if let Some(mut s) = spring {
+                s.pos_x.velocity = 0.0;
+                s.pos_y.velocity = 0.0;
+            }
             commands.entity(entity).try_remove::<RepositionMarker>();
             continue;
         }
 
-        let Some(display) = displays.iter().find(|display| display.id() == *display_id) else {
-            continue;
-        };
-        let move_delta = move_ratio * f64::from(display.width());
-        let delta = window
-            .frame()
-            .min
-            .as_vec2()
-            .move_towards(origin.as_vec2(), move_delta as f32)
-            .as_ivec2();
+        let cur = window.frame().min;
+        if let Some(mut s) = spring {
+            let (nx, sx) = spring::step(f64::from(cur.x), f64::from(origin.x), &mut s.pos_x, &params, dt);
+            let (ny, sy) = spring::step(f64::from(cur.y), f64::from(origin.y), &mut s.pos_y, &params, dt);
+            let delta = Origin::new(nx.round() as i32, ny.round() as i32);
 
-        trace!(
-            "window {} source {} dest {origin} delta {move_delta} moving to {delta}",
-            window.id(),
-            window.frame().min,
-        );
-        window.reposition(delta);
-        if *origin == delta {
+            trace!(
+                "window {} source {} dest {origin} spring → {delta}",
+                window.id(), cur,
+            );
+            window.reposition(delta);
+            if sx && sy {
+                commands.entity(entity).try_remove::<RepositionMarker>();
+            }
+        } else {
+            // No spring state — snap instantly (e.g. test environment).
+            window.reposition(*origin);
             commands.entity(entity).try_remove::<RepositionMarker>();
         }
     }
@@ -748,32 +752,39 @@ pub(crate) fn animate_windows(
 #[allow(clippy::needless_pass_by_value)]
 #[instrument(level = Level::TRACE, skip_all)]
 pub(crate) fn animate_resize_windows(
-    windows: Populated<(&mut Window, Entity, &ResizeMarker, Has<RepositionMarker>)>,
+    windows: Populated<(
+        &mut Window,
+        Entity,
+        &ResizeMarker,
+        Has<RepositionMarker>,
+        Option<&mut SpringState>,
+    )>,
     displays: Query<&Display>,
     reload_guard: Option<Res<ReloadGuard>>,
     time: Res<Time>,
-    config: Res<Config>,
     mut commands: Commands,
 ) {
-    let instant_snap = reload_guard.is_some();
+    use crate::logic::spring::{self, SpringParams};
 
-    for (mut window, entity, ResizeMarker { size, display_id }, moving) in windows {
+    let dt = time.delta_secs_f64();
+    let instant_snap = reload_guard.is_some();
+    let params = SpringParams::default();
+
+    for (mut window, entity, ResizeMarker { size, display_id }, moving, spring) in windows {
         if instant_snap {
             let Some(display) = displays.iter().find(|d| d.id() == *display_id) else {
                 continue;
             };
+            if let Some(mut s) = spring {
+                s.size_x.velocity = 0.0;
+                s.size_y.velocity = 0.0;
+            }
             window.resize(*size, display.width());
             commands.entity(entity).try_remove::<ResizeMarker>();
             continue;
         }
 
         if moving {
-            // Defer resize while the window is being repositioned so it
-            // doesn't extend past the screen edge before the move lands.
-            // Exception: when the resize *shrinks* the window (e.g.
-            // stacking), there is no risk of overshooting the screen, and
-            // deferring would leave the window at its old (full) height
-            // until the reposition finishes.
             let current_size = window.frame().size();
             if size.x > current_size.x || size.y > current_size.y {
                 continue;
@@ -783,20 +794,22 @@ pub(crate) fn animate_resize_windows(
             continue;
         };
 
-        let move_ratio = config.animation_speed() * time.delta_secs_f64();
-        let move_delta = move_ratio * f64::from(display.width());
-        let origin = window.frame().size();
-        let delta = origin
-            .as_vec2()
-            .move_towards(size.as_vec2(), move_delta as f32)
-            .as_ivec2();
+        let cur = window.frame().size();
+        if let Some(mut s) = spring {
+            let (nw, sw) = spring::step(f64::from(cur.x), f64::from(size.x), &mut s.size_x, &params, dt);
+            let (nh, sh) = spring::step(f64::from(cur.y), f64::from(size.y), &mut s.size_y, &params, dt);
+            let delta = Size::new(nw.round() as i32, nh.round() as i32);
 
-        trace!(
-            "window {} source {origin} dest {size} delta {move_delta} resizing to {delta}",
-            window.id(),
-        );
-        window.resize(delta, display.width());
-        if *size == delta {
+            trace!(
+                "window {} source {cur} dest {size} spring → {delta}",
+                window.id(),
+            );
+            window.resize(delta, display.width());
+            if sw && sh {
+                commands.entity(entity).try_remove::<ResizeMarker>();
+            }
+        } else {
+            window.resize(*size, display.width());
             commands.entity(entity).try_remove::<ResizeMarker>();
         }
     }

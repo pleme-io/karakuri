@@ -17,7 +17,7 @@ use tracing::{Level, debug, error, info, instrument, trace, warn};
 
 use super::{
     ActiveDisplayMarker, BProcess, FocusedMarker, FreshMarker,
-    NativeFullscreenMarker, SnapZone, SpawnWindowTrigger, StrayFocusEvent,
+    NativeFullscreenMarker, SnapZone, SpawnWindowTrigger, SpringState, StrayFocusEvent,
     Timeout, Unmanaged, WMEventTrigger, WindowDraggedMarker,
 };
 use crate::ecs::state::{FullscreenSpace, ReloadGuard};
@@ -1144,7 +1144,7 @@ pub(crate) fn spawn_window_trigger(
         );
 
         // Insert the window into the internal Bevy state.
-        let entity = commands.spawn((window, ChildOf(app_entity))).id();
+        let entity = commands.spawn((window, SpringState::default(), ChildOf(app_entity))).id();
 
         apply_window_properties(
             entity,

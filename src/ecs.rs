@@ -74,6 +74,17 @@ pub struct ResizeMarker {
     pub display_id: CGDirectDisplayID,
 }
 
+/// Per-window spring animation velocity state.
+/// Persists across marker re-insertions so mid-flight retargets
+/// preserve momentum instead of restarting from zero.
+#[derive(Component, Default)]
+pub struct SpringState {
+    pub pos_x: crate::logic::spring::SpringAxis,
+    pub pos_y: crate::logic::spring::SpringAxis,
+    pub size_x: crate::logic::spring::SpringAxis,
+    pub size_y: crate::logic::spring::SpringAxis,
+}
+
 /// Marker component indicating that a window is currently being dragged by the mouse.
 #[derive(Component)]
 pub struct WindowDraggedMarker {
