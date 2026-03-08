@@ -81,14 +81,14 @@ and automatically cleaned up.
 
 ### Animation Strategy
 
-- **Interpolation** for normal operations (focus switch, window swap)
+- **Spring physics** (critically-damped harmonic oscillator) for normal
+  operations — `SpringState` component tracks per-window velocity
 - **Instant-snap** during reload guards and swipe tracking
 - Animation systems check for guard/swipe resources to decide strategy
 - When adding new animation, always handle the instant-snap path
-
-Future direction: replace duration-based `animation_speed` with spring physics
-(damping_ratio + stiffness). Springs handle mid-flight target changes naturally
-without explicit interruption logic.
+- Default parameters: stiffness=800, damping_ratio=1.0, epsilon=0.5px
+- Mid-flight retargeting preserves velocity for smooth trajectory changes
+- Pure spring math lives in `logic/spring.rs` with 8 unit tests
 
 ### Event Debouncing
 
@@ -131,10 +131,11 @@ these modules — they never contain the algorithm inline.
 
 | Module | Functions | Tests |
 |--------|-----------|-------|
-| `logic/snap.rs` | `detect_snap_zone`, `snap_frame` | 14 |
+| `logic/snap.rs` | `detect_snap_zone`, `snap_frame` | 16 |
 | `logic/navigation.rs` | `window_in_direction`, `display_in_direction` | 24 |
 | `logic/swipe.rs` | `smooth_velocity`, `decay_velocity`, `velocity_to_pixel_shift`, `clamp_viewport_offset`, `below_stop_threshold`, `delta_to_shift`, `below_swipe_resolution` | 31 |
 | `logic/drag.rs` | `clamp_origin_to_bounds`, `offset_frame_within_bounds` | 15 |
+| `logic/spring.rs` | `step` (damped harmonic oscillator) | 8 |
 
 **Convention**: When adding new behavior, write the pure function in `logic/`
 first with unit tests, then call it from the ECS layer. The ECS layer handles
