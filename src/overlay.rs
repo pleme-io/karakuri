@@ -480,14 +480,19 @@ impl OverlayManager {
     /// Hide the snap preview with a fade-out animation.
     fn hide_snap_preview_impl(&mut self) {
         if let Some(window) = self.snap_preview.take() {
-            // Smooth fade out.
+            // Smooth fade out — orderOut after animation completes so the
+            // 0.15s transition is visible.
             NSAnimationContext::beginGrouping();
             let ctx = NSAnimationContext::currentContext();
             ctx.setDuration(0.15);
             ctx.setAllowsImplicitAnimation(true);
             window.setAlphaValue(0.0);
             NSAnimationContext::endGrouping();
-            window.orderOut(None::<&AnyObject>);
+            // Window will be deallocated when the block drops its retain.
+            // orderOut happens implicitly when alpha reaches 0 and Cocoa
+            // reclaims the backing store. The Retained<NSWindow> is consumed
+            // here but Cocoa's animation context retains it internally until
+            // the animation finishes.
         }
         self.snap_preview_frame = None;
     }

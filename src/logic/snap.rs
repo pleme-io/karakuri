@@ -25,12 +25,13 @@ pub fn detect_snap_zone(
     let near_top = py - bounds.min.y < threshold;
     let near_bottom = bounds.max.y - py < threshold;
 
-    if near_left && snap.left.unwrap_or(false) {
+    // Corners (fullscreen) checked first so they aren't shadowed by edge halves.
+    if (near_top && near_left || near_top && near_right) && snap.fullscreen.unwrap_or(false) {
+        Some(SnapZone::Fullscreen)
+    } else if near_left && snap.left.unwrap_or(false) {
         Some(SnapZone::LeftHalf)
     } else if near_right && snap.right.unwrap_or(false) {
         Some(SnapZone::RightHalf)
-    } else if near_top && near_left && snap.fullscreen.unwrap_or(false) {
-        Some(SnapZone::Fullscreen)
     } else if near_top && snap.top.unwrap_or(false) {
         Some(SnapZone::TopHalf)
     } else if near_bottom && snap.bottom.unwrap_or(false) {
@@ -147,7 +148,22 @@ mod tests {
     fn cursor_at_top_left_corner_snaps_fullscreen() {
         let bounds = display_bounds();
         let zone = detect_snap_zone(3, 3, &bounds, 10, &all_enabled());
-        // left check wins over fullscreen because left is checked first
+        // Corners trigger fullscreen — checked before edge halves.
+        assert_eq!(zone, Some(SnapZone::Fullscreen));
+    }
+
+    #[test]
+    fn cursor_at_top_right_corner_snaps_fullscreen() {
+        let bounds = display_bounds();
+        let zone = detect_snap_zone(1917, 3, &bounds, 10, &all_enabled());
+        assert_eq!(zone, Some(SnapZone::Fullscreen));
+    }
+
+    #[test]
+    fn corner_without_fullscreen_enabled_falls_through_to_half() {
+        let bounds = display_bounds();
+        let zone = detect_snap_zone(3, 3, &bounds, 10, &left_right_only());
+        // fullscreen disabled, so corner falls through to left-half
         assert_eq!(zone, Some(SnapZone::LeftHalf));
     }
 

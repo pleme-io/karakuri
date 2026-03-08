@@ -173,10 +173,11 @@ define_class!(
                     process.unobserve_finished_launching();
                 }
                 "activationPolicy" => {
-                    if policy.is_some_and(|value| i32::try_from(process.policy.0).is_ok_and(|policy| value == policy)) {
+                    let Some(value) = policy else { return };
+                    if i32::try_from(process.policy.0).is_ok_and(|current| value == current) {
                         return;
                     }
-                    process.policy = NSApplicationActivationPolicy(policy.unwrap() as isize);
+                    process.policy = NSApplicationActivationPolicy(value as isize);
                     process.unobserve_activation_policy();
                 }
                 err => {

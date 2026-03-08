@@ -1,7 +1,8 @@
 use accessibility_sys::{
-    AXUIElementRef, AXValueCreate, AXValueGetValue, kAXFloatingWindowSubrole, kAXPositionAttribute,
-    kAXRaiseAction, kAXSizeAttribute, kAXStandardWindowSubrole, kAXUnknownSubrole,
-    kAXValueTypeCGPoint, kAXValueTypeCGSize, kAXWindowRole,
+    AXUIElementGetPid, AXUIElementRef, AXValueCreate, AXValueGetValue,
+    kAXFloatingWindowSubrole, kAXPositionAttribute, kAXRaiseAction, kAXSizeAttribute,
+    kAXStandardWindowSubrole, kAXUnknownSubrole, kAXValueTypeCGPoint, kAXValueTypeCGSize,
+    kAXWindowRole,
 };
 use bevy::ecs::component::Component;
 use bevy::math::IRect;
@@ -432,9 +433,9 @@ impl WindowApi for WindowOS {
                 SLPSPostEventRecordTo(&focused_psn, event_bytes.as_ptr().cast());
             }
 
-            // Artificially delay the activation by 1ms. This is necessary because some
-            // applications appear to be confused if both of the events appear instantaneously.
-            thread::sleep(Duration::from_millis(20));
+            // Artificially delay the activation. Some applications are confused if both
+            // events appear instantaneously. 5ms is enough without blocking a full frame.
+            thread::sleep(Duration::from_millis(5));
 
             event_bytes[0x8a] = 0x01;
             event_bytes[0x3c..0x40].copy_from_slice(&window_id.to_ne_bytes());
@@ -467,15 +468,15 @@ impl WindowApi for WindowOS {
     }
 
     fn pid(&self) -> Result<Pid> {
-        let pid: Pid = unsafe {
-            NonNull::new_unchecked(self.ax_element.as_ptr::<Pid>())
-                .byte_add(0x10)
-                .read()
-        };
-        (pid != 0).then_some(pid).ok_or(Error::InvalidInput(format!(
-            "can not get pid from {:?}.",
-            self.ax_element
-        )))
+        let mut pid: Pid = 0;
+        let err = unsafe { AXUIElementGetPid(self.ax_element.as_ptr(), &mut pid) };
+        if err != 0 || pid == 0 {
+            return Err(Error::InvalidInput(format!(
+                "can not get pid from {:?} (AXError={err}).",
+                self.ax_element
+            )));
+        }
+        Ok(pid)
     }
 
     fn set_padding(&mut self, padding: WindowPadding) {

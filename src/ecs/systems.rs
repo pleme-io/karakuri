@@ -1445,7 +1445,11 @@ pub(crate) fn gather_initial_processes(
     let mut initial_processes: Vec<BProcess> = Vec::new();
     let mut initial_config = None;
     loop {
-        match receiver.recv().expect("error reading initial processes") {
+        let Ok(event) = receiver.recv() else {
+            error!("Platform channel closed during initialization");
+            break;
+        };
+        match event {
             Event::ProcessesLoaded | Event::Exit => break,
             Event::ApplicationLaunched { psn, observer } => {
                 initial_processes.push(Process::new(&psn, observer.clone()).into());
