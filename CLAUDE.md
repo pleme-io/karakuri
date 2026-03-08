@@ -3,9 +3,8 @@
 ## Build & Test
 
 ```bash
-cargo build          # compile
-cargo clippy         # lint (zero new warnings required)
-cargo test           # 100+ unit tests, deterministic (no platform deps)
+cargo build          # compile (zero warnings required)
+cargo test           # 175 unit tests, deterministic (no platform deps)
 cargo run            # launch (requires macOS Accessibility permissions)
 ```
 
@@ -88,7 +87,7 @@ and automatically cleaned up.
 - When adding new animation, always handle the instant-snap path
 - Default parameters: stiffness=800, damping_ratio=1.0, epsilon=0.5px
 - Mid-flight retargeting preserves velocity for smooth trajectory changes
-- Pure spring math lives in `logic/spring.rs` with 8 unit tests
+- Pure spring math lives in `logic/spring.rs` with 11 unit tests
 
 ### Event Debouncing
 
@@ -112,6 +111,16 @@ Every user-visible action (keybinding, MCP command, script call) flows through
 the same command enum and dispatch path. This makes testing deterministic —
 test commands directly, not input device → event → command chains.
 
+### Zero-Unwrap Policy
+
+Production code contains zero `unwrap()` or `expect()` calls. All error paths
+use one of:
+- `Result` propagation with `?` operator
+- `let Some(...) = expr else { return ... }` guards
+- Safe casts (`as usize`, `as u32`) where the value is known to fit
+- Compile-time literals (`u32::from_be_bytes(*b"psn ")`)
+- RwLock poison recovery (`.into_inner()` on poisoned lock)
+
 ### Testing Principles
 
 - **Deterministic FSM testing**: Test state transitions via `run_system_once`,
@@ -133,10 +142,10 @@ these modules — they never contain the algorithm inline.
 |--------|-----------|-------|
 | `logic/snap.rs` | `detect_snap_zone`, `snap_frame` | 16 |
 | `logic/navigation.rs` | `window_in_direction`, `display_in_direction` | 24 |
-| `logic/swipe.rs` | `smooth_velocity`, `velocity_to_pixel_shift`, `clamp_viewport_offset`, `below_stop_threshold`, `delta_to_shift` | 23 |
+| `logic/swipe.rs` | `smooth_velocity`, `velocity_to_pixel_shift`, `clamp_viewport_offset`, `below_stop_threshold`, `delta_to_shift` | 22 |
 | `logic/drag.rs` | `clamp_origin_to_bounds`, `offset_frame_within_bounds` | 16 |
 | `logic/spring.rs` | `step` (damped harmonic oscillator) | 11 |
-| `logic/layout.rs` | `compute_final_frames` (coordinate transforms, sliver logic) | 18 |
+| `logic/layout.rs` | `compute_final_frames` (coordinate transforms, sliver logic) | 17 |
 
 **Convention**: When adding new behavior, write the pure function in `logic/`
 first with unit tests, then call it from the ECS layer. The ECS layer handles
@@ -173,14 +182,14 @@ index back to get the Display.
 
 | Path | Purpose |
 |------|---------|
-| `src/logic/` | Pure testable logic (snap, navigation, swipe, drag) |
+| `src/logic/` | Pure testable logic (snap, navigation, swipe, drag, spring, layout) |
 | `src/ecs/state.rs` | Bevy States enums, context resources, guards |
-| `src/ecs/systems.rs` | All frame-driven systems (layout, animation, event pump) |
+| `src/ecs/systems/` | Frame-driven systems (mod.rs + animation.rs + overlay.rs) |
 | `src/ecs/triggers.rs` | Observer-driven triggers (focus, workspace, config, drag) |
 | `src/ecs/params.rs` | Custom SystemParams (Windows, ActiveDisplay, Configuration) |
 | `src/ecs.rs` | Entity helpers, component/marker definitions, app setup |
 | `src/plugins/window.rs` | WindowPlugin — system registration and ordering |
-| `src/config.rs` | TOML config parsing, keybinding resolution |
+| `src/config.rs` | TOML/YAML config parsing, keybinding resolution |
 | `src/manager/` | Window, Display, LayoutStrip, Process abstractions |
 | `src/platform/` | macOS platform layer (Accessibility API, gestures) |
 | `src/commands.rs` | User command implementations (focus, swap, resize, etc.) |

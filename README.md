@@ -44,7 +44,7 @@ An `InteractionMode` FSM (Idle, Dragging, Swiping, MissionControl) gates system 
 - **MCP server** -- live ECS state inspection and command dispatch for Claude Code (`ayatsuri mcp`)
 - **Focus follows mouse** -- optional mouse-driven focus tracking
 - **Touchpad gestures** -- four-finger swipe to scroll the window strip
-- **Animated transitions** -- interpolated repositioning with instant-snap during guards and swipes
+- **Spring-physics animation** -- critically-damped harmonic oscillator with mid-flight retargeting and instant-snap fallback
 - **Window border overlays** -- colored borders and dim-inactive overlays via native Cocoa windows
 - **Edge-snap drag preview** -- visual snap zones during window dragging
 - **Hot-reload** -- configuration and scripts reload automatically without restart
@@ -199,26 +199,26 @@ Configuration changes are automatically hot-reloaded.
 ## Development
 
 ```bash
-cargo build          # Compile
-cargo clippy         # Lint (pedantic warnings enabled)
-cargo test           # Run unit tests (platform-independent, deterministic)
+cargo build          # Compile (zero warnings required)
+cargo test           # Run 175 unit tests (platform-independent, deterministic)
 cargo run            # Launch (requires macOS Accessibility permissions)
 ```
 
-Tests are platform-independent: `pump_events` is a no-op in test mode and events are injected via `world.write_message::<Event>()`. A static `TEST_MUTEX` serializes integration tests to prevent SIGABRT from parallel Bevy App initialization.
+Tests are platform-independent: `pump_events` is a no-op in test mode and events are injected via `world.write_message::<Event>()`. A static `TEST_MUTEX` serializes integration tests to prevent SIGABRT from parallel Bevy App initialization. Production code has zero `unwrap()`/`expect()` calls — all error paths use `Result` propagation, `let-else` guards, or safe casts.
 
 ## Project Structure
 
 | Path | Purpose |
 |------|---------|
 | `src/main.rs` | CLI entry point (clap), dispatches subcommands |
+| `src/logic/` | Pure testable logic (snap, navigation, swipe, drag, spring, layout) — 106 tests |
 | `src/ecs/state.rs` | Bevy States enums, context resources, guards |
-| `src/ecs/systems.rs` | Frame-driven systems (layout, animation, event pump) |
+| `src/ecs/systems/` | Frame-driven systems (mod.rs + animation.rs + overlay.rs) |
 | `src/ecs/triggers.rs` | Observer-driven triggers (focus, workspace, config, drag) |
 | `src/ecs/params.rs` | Custom SystemParams (Windows, ActiveDisplay, Configuration) |
 | `src/ecs.rs` | Entity helpers, component/marker definitions, app setup |
 | `src/commands.rs` | Command enum and all command handler systems |
-| `src/config.rs` | TOML/YAML config parsing, keybinding resolution |
+| `src/config.rs` | Config parsing (YAML preferred, TOML supported), keybinding resolution |
 | `src/mcp.rs` | MCP server (stdio transport) for Claude Code |
 | `src/plugins/window.rs` | WindowPlugin -- system registration and ordering |
 | `src/plugins/scripting/` | Rhai scripting engine, API registration, script loader |
@@ -234,6 +234,7 @@ Tests are platform-independent: `pump_events` is a no-op in test mode and events
 
 ## Related Projects
 
+- [blackmatter-ayatsuri](https://github.com/pleme-io/blackmatter-ayatsuri) -- Nix home-manager module and MCP server config
 - [substrate](https://github.com/pleme-io/substrate) -- Nix build patterns (provides `hm-service-helpers`)
 - [blackmatter](https://github.com/pleme-io/blackmatter) -- Home-manager module aggregator
 - [Paneru](https://github.com/karinushka/paneru) -- Original upstream project
