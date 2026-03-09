@@ -1,4 +1,4 @@
-use accessibility_sys::{AXIsProcessTrustedWithOptions, kAXTrustedCheckOptionPrompt};
+use accessibility_sys::{AXIsProcessTrusted, AXIsProcessTrustedWithOptions, kAXTrustedCheckOptionPrompt};
 use bevy::ecs::resource::Resource;
 use bevy::math::{IRect, IVec2};
 use core::ptr::NonNull;
@@ -776,13 +776,19 @@ pub fn bruteforce_windows(pid: Pid, mut window_list: Vec<WinID>) -> Vec<Window> 
     found_windows
 }
 
-/// Checks if the application has Accessibility privileges.
-/// It will prompt the user to grant permission if not already granted.
+/// Checks if the application has Accessibility privileges without prompting.
 ///
-/// # Returns
+/// Returns `true` if already granted, `false` otherwise.
+pub fn is_ax_trusted() -> bool {
+    unsafe { AXIsProcessTrusted() }
+}
+
+/// Checks if the application has Accessibility privileges,
+/// prompting the user via System Settings if not yet granted.
 ///
-/// `true` if Accessibility privileges are granted, `false` otherwise.
-pub fn check_ax_privilege() -> bool {
+/// Call this at most **once** per process lifetime — subsequent checks
+/// should use [`is_ax_trusted`] to avoid repeated System Settings dialogs.
+pub fn check_ax_privilege_with_prompt() -> bool {
     unsafe {
         let Some(prompt_key) = kAXTrustedCheckOptionPrompt
             .cast::<CFString>()

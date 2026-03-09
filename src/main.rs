@@ -116,8 +116,10 @@ fn main() -> Result<()> {
                 Err(errors::Error::PermissionDenied(msg)) => {
                     eprintln!("Permission denied: {msg}");
                     eprintln!("Grant accessibility access in System Settings → Privacy & Security → Accessibility, then restart ayatsuri.");
-                    // Exit 0 so launchd KeepAlive doesn't restart in a loop.
-                    return Ok(());
+                    // Exit 78 (EX_CONFIG from sysexits.h) — launchd treats non-zero
+                    // as a crash, but the KeepAlive.Crashed policy will back off
+                    // exponentially rather than restarting immediately.
+                    std::process::exit(78);
                 }
                 Err(e) => return Err(e),
             }

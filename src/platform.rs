@@ -11,7 +11,7 @@ use tracing::error;
 use crate::config::{CONFIGURATION_FILE, Config};
 use crate::errors::{Error, Result};
 use crate::events::{Event, EventSender};
-use crate::manager::{check_ax_privilege, check_separate_spaces};
+use crate::manager::{check_ax_privilege_with_prompt, check_separate_spaces, is_ax_trusted};
 use crate::platform::display::PinnedDisplayHandler;
 use crate::platform::input::PinnedInputHandler;
 use crate::platform::process::PinnedProcessHandler;
@@ -195,7 +195,8 @@ impl PlatformCallbacks {
     /// - Activates `CGEventTap`, `CGDisplayReconfigurationCallback`, `AXObserver` for Mission Control,
     ///   `NSWorkspace` observers, and Carbon process event handlers.
     pub fn setup_handlers(&mut self) -> Result<()> {
-        if !check_ax_privilege() {
+        // Two-phase accessibility check: silent first, prompt only once.
+        if !is_ax_trusted() && !check_ax_privilege_with_prompt() {
             return Err(Error::PermissionDenied(
                 "Accessibility permissions are required. Please enable them in System Settings → Privacy & Security → Accessibility.".to_string(),
             ));

@@ -143,7 +143,7 @@ in
       '';
     }
 
-    # Launchd agent
+    # Launchd agent — restart only on real crashes, not permission errors
     (mkLaunchdService {
       name = "ayatsuri";
       label = "io.pleme.ayatsuri";
@@ -151,7 +151,10 @@ in
       args = [ "launch" ];
       logDir = logDir;
       processType = "Interactive";
-      keepAlive = true;
+      keepAlive = {
+        Crashed = true;
+        SuccessfulExit = false;
+      };
     })
 
     # YAML configuration (figment-based, hot-reloaded)
