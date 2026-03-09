@@ -38,6 +38,10 @@ pub struct Configuration<'w> {
 
 #[allow(dead_code)] // Accessors for features being wired up (FFM, gestures, edge padding).
 impl Configuration<'_> {
+    pub fn window_management_enabled(&self) -> bool {
+        self.config.window_management_enabled()
+    }
+
     pub fn focus_follows_mouse(&self) -> bool {
         self.config
             .options()
@@ -108,6 +112,10 @@ pub struct ConfigurationMut<'w> {
 
 #[allow(dead_code)]
 impl ConfigurationMut<'_> {
+    pub fn window_management_enabled(&self) -> bool {
+        self.config.window_management_enabled()
+    }
+
     pub fn focus_follows_mouse(&self) -> bool {
         self.config
             .options()

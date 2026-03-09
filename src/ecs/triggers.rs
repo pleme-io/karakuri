@@ -65,7 +65,7 @@ pub(crate) fn mouse_moved_trigger(
         return;
     };
 
-    if !config.focus_follows_mouse() {
+    if !config.window_management_enabled() || !config.focus_follows_mouse() {
         return;
     }
     if config.mission_control_active() {
@@ -671,7 +671,7 @@ pub(crate) fn window_focused_trigger(
 
     commands.entity(entity).try_insert(FocusedMarker);
 
-    if !(config.skip_reshuffle() || config.initializing()) {
+    if config.window_management_enabled() && !(config.skip_reshuffle() || config.initializing()) {
         if config.auto_center()
             && let Some((_, _, None)) = windows.get_managed(entity)
         {
@@ -717,7 +717,7 @@ pub(crate) fn swipe_gesture_trigger(
     let Event::Swipe { ref deltas } = trigger.event().0 else {
         return;
     };
-    if config.mission_control_active() {
+    if !config.window_management_enabled() || config.mission_control_active() {
         return;
     }
     if config
@@ -1132,30 +1132,37 @@ pub(crate) fn spawn_window_trigger(
         );
 
         let title = window.title().unwrap_or_default();
-        let properties = config.find_window_properties(&title, bundle_id);
-        if !properties.is_empty() {
-            debug!("Applying window properties for '{}'", window.id());
+
+        if config.window_management_enabled() {
+            let properties = config.find_window_properties(&title, bundle_id);
+            if !properties.is_empty() {
+                debug!("Applying window properties for '{}'", window.id());
+            }
+
+            apply_window_defaults(
+                &mut window,
+                &mut active_display,
+                &properties,
+                config.edge_padding(),
+            );
+
+            // Insert the window into the internal Bevy state.
+            let entity = commands.spawn((window, SpringState::default(), ChildOf(app_entity))).id();
+
+            apply_window_properties(
+                entity,
+                &properties,
+                &mut active_display,
+                &windows,
+                &mut apps,
+                &mut config,
+                &mut commands,
+            );
+        } else {
+            // Window management disabled — still track the window in ECS
+            // but skip all layout/rule application.
+            commands.spawn((window, SpringState::default(), ChildOf(app_entity)));
         }
-
-        apply_window_defaults(
-            &mut window,
-            &mut active_display,
-            &properties,
-            config.edge_padding(),
-        );
-
-        // Insert the window into the internal Bevy state.
-        let entity = commands.spawn((window, SpringState::default(), ChildOf(app_entity))).id();
-
-        apply_window_properties(
-            entity,
-            &properties,
-            &mut active_display,
-            &windows,
-            &mut apps,
-            &mut config,
-            &mut commands,
-        );
     }
 }
 

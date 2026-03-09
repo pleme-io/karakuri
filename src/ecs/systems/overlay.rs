@@ -30,6 +30,11 @@ pub(crate) fn update_overlays(
         return;
     };
 
+    if !config.config().window_management_enabled() {
+        overlay_mgr.remove_all();
+        return;
+    }
+
     let dim_opacity = config.config().dim_inactive_opacity();
     let border_enabled = config.config().border_active_window();
 
@@ -103,7 +108,7 @@ pub(crate) fn update_snap_preview(
         return;
     };
 
-    if !config.edge_snap_preview_enabled() {
+    if !config.window_management_enabled() || !config.edge_snap_preview_enabled() {
         overlay_mgr.hide_snap_preview();
         return;
     }

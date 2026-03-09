@@ -698,6 +698,9 @@ pub(crate) fn window_swiper(
     mut next_mode: ResMut<bevy::state::state::NextState<InteractionMode>>,
     mut commands: Commands,
 ) {
+    if !config.window_management_enabled() {
+        return;
+    }
     let get_window_frame = |entity| get_moving_window_frame(entity, &active_display, &windows);
     let get_window_h_pad = |entity: Entity| {
         windows
@@ -981,10 +984,12 @@ pub(crate) fn reshuffle_layout_strip(
     mut commands: Commands,
 ) {
     // Always clean up markers to prevent accumulation, but suppress the
-    // actual layout pass while a reload guard is active and not yet settled.
-    let guard_active = reload_guard
-        .as_ref()
-        .is_some_and(|g| !g.settled());
+    // actual layout pass while a reload guard is active, not yet settled,
+    // or window management is disabled.
+    let guard_active = !config.window_management_enabled()
+        || reload_guard
+            .as_ref()
+            .is_some_and(|g| !g.settled());
     let pre_positions = reload_guard.as_ref().map(|g| &g.pre_positions);
 
     let get_window_frame = |entity| get_moving_window_frame(entity, &active_display, &windows);

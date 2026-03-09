@@ -402,6 +402,10 @@ impl Config {
             .clamp(1.0, 10.0)
     }
 
+    pub fn window_management_enabled(&self) -> bool {
+        self.options().enable_window_management.unwrap_or(true)
+    }
+
     pub fn is_floating_mode(&self) -> bool {
         self.options().mode == WindowMode::Floating
     }
@@ -858,6 +862,11 @@ pub struct MainOptions {
     /// In floating mode all windows are free-positioned; the tiling layout is disabled.
     #[serde(default)]
     pub mode: WindowMode,
+    /// Master switch for all window management features.
+    /// When false, ayatsuri skips tiling, focus tracking, borders, dimming,
+    /// swipe gestures, and window rules. Keybind exec commands, MCP,
+    /// scripting, and wallpaper continue to work. Default: true.
+    pub enable_window_management: Option<bool>,
     /// Allow the `window_manage` keybinding to toggle individual windows between
     /// tiled and floating. When false the keybinding is ignored. Default: true.
     pub enable_manage_toggle: Option<bool>,

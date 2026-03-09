@@ -17,6 +17,7 @@ use std::time::Instant;
 use stdext::function_name;
 use tracing::{error, info};
 
+use crate::commands::Command;
 use crate::config::Config;
 use crate::errors::{Error, Result};
 use crate::events::{Event, EventSender};
@@ -372,6 +373,13 @@ impl InputHandler {
         keycode
             .and_then(|keycode| self.config.find_keybind(keycode, &mask))
             .and_then(|command| {
+                // When window management is disabled, drop window commands but
+                // keep exec, quit, printstate, mode, reload, and script commands.
+                if !self.config.window_management_enabled() {
+                    if matches!(command, Command::Window(_) | Command::Mouse(_)) {
+                        return None;
+                    }
+                }
                 events
                     .send(Event::Command { command })
                     .inspect_err(|err| error!("Error sending command: {err}"))
