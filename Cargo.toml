@@ -21,11 +21,11 @@ lto = true
 [dependencies]
 accessibility-sys = "0.2.0"
 arc-swap = "1.8.1"
+awase = { git = "https://github.com/pleme-io/awase" }
 bevy = { version = "0.18.0", default-features = false, features = [
   "multi_threaded",
   "bevy_state",
 ] }
-bitflags = "2.10.0"
 chrono = "0.4.43"
 clap = { version = "4.5.57", features = ["cargo", "derive"] }
 derive_more = { version = "2.1.1", features = ["deref", "deref_mut"] }
