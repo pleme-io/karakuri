@@ -276,14 +276,14 @@ impl Config {
     /// # Returns
     ///
     /// `Some(Command)` if a matching keybinding is found, otherwise `None`.
-    pub fn find_keybind(&self, keycode: u8, mask: &Modifiers) -> Option<Command> {
+    pub fn find_keybind(&self, keycode: u8, mask: Modifiers) -> Option<Command> {
         let config = self.inner();
         config
             .bindings
             .values()
             .flat_map(|binds| binds.all())
             .find_map(|bind| {
-                (bind.code == keycode && bind.modifiers == *mask).then_some(bind.command.clone())
+                (bind.code == keycode && bind.modifiers == mask).then_some(bind.command.clone())
             })
     }
 
@@ -386,6 +386,11 @@ impl Config {
 
     pub fn menubar_height(&self) -> Option<i32> {
         self.options().menubar_height.map(i32::from)
+    }
+
+    /// Returns the status bar configuration.
+    pub fn status_bar(&self) -> crate::plugins::status_bar::config::StatusBarConfig {
+        self.inner().status_bar.clone()
     }
 
     pub fn swipe_sensitivity(&self) -> f64 {
@@ -496,6 +501,7 @@ impl Config {
             scripting: inner.scripting.clone(),
             execs: inner.execs.clone(),
             system_defaults: inner.system_defaults.clone(),
+            status_bar: inner.status_bar.clone(),
         };
         self.inner.store(Arc::new(new_inner));
         Ok(())
@@ -666,6 +672,9 @@ struct InnerConfig {
     /// Arbitrary macOS `defaults write` entries applied at startup and hot-reload.
     /// Outer key = domain (e.g. "com.apple.dock"), inner key = preference key.
     system_defaults: Option<HashMap<String, HashMap<String, DefaultsValue>>>,
+    /// Status bar configuration.
+    #[serde(default)]
+    status_bar: crate::plugins::status_bar::config::StatusBarConfig,
 }
 
 /// A typed value for the `system_defaults` config section.
@@ -1018,7 +1027,7 @@ impl<'de> Deserialize<'de> for Keybinding {
 
         let modifiers = match parts.pop() {
             Some(modifiers) => parse_modifiers(modifiers).map_err(de::Error::custom)?,
-            None => Modifiers::empty(),
+            None => Modifiers::NONE,
         };
 
         Ok(Keybinding {
@@ -1096,15 +1105,17 @@ where
 ///
 /// `Ok(Modifiers)` with the combined modifier bitmask if parsing is successful, otherwise `Err(String)` with an error message for an invalid modifier.
 fn parse_modifiers(input: &str) -> Result<Modifiers> {
-    let mut out = Modifiers::empty();
+    let mut out = Modifiers::NONE;
 
     let modifiers = input.split('+').map(str::trim).collect::<Vec<_>>();
     for modifier in &modifiers {
-        out |= match *modifier {
-            "alt" => Modifiers::ALT,
+        out |= match modifier.to_ascii_lowercase().as_str() {
+            "alt" | "option" | "opt" => Modifiers::ALT,
             "shift" => Modifiers::SHIFT,
-            "cmd" => Modifiers::CMD,
-            "ctrl" => Modifiers::CTRL,
+            "cmd" | "command" | "super" | "meta" => Modifiers::CMD,
+            "ctrl" | "control" => Modifiers::CTRL,
+            "fn" => Modifiers::FN,
+            "hyper" => Modifiers::HYPER,
             _ => {
                 return Err(Error::InvalidConfig(format!(
                     "{}: Invalid modifier: {modifier}",
@@ -1446,24 +1457,24 @@ index = 1
     // Modifiers: alt = 1<<0, ctrl = 1<<3.
     let keycode = find_key('q');
     assert!(matches!(
-        config.find_keybind(keycode, &(Modifiers::ALT | Modifiers::CTRL)),
+        config.find_keybind(keycode, Modifiers::ALT | Modifiers::CTRL),
         Some(Command::Quit)
     ));
 
     let keycode = find_key('t');
     assert!(matches!(
-        config.find_keybind(keycode, &(Modifiers::ALT | Modifiers::CTRL)),
+        config.find_keybind(keycode, Modifiers::ALT | Modifiers::CTRL),
         Some(Command::Window(Operation::Manage))
     ));
 
     let keycode = find_key('s');
     assert!(matches!(
-        config.find_keybind(keycode, &Modifiers::CTRL),
+        config.find_keybind(keycode, Modifiers::CTRL),
         Some(Command::Window(Operation::Stack(true)))
     ));
 
     assert!(matches!(
-        config.find_keybind(keycode, &Modifiers::ALT),
+        config.find_keybind(keycode, Modifiers::ALT),
         Some(Command::Window(Operation::Stack(true)))
     ));
 
@@ -1834,9 +1845,16 @@ fn test_parse_modifiers_all() {
 
 #[test]
 fn test_parse_modifiers_invalid() {
-    assert!(parse_modifiers("super").is_err());
-    assert!(parse_modifiers("ctrl+meta").is_err());
+    assert!(parse_modifiers("nonexistent").is_err());
     assert!(parse_modifiers("").is_err());
+}
+
+#[test]
+fn test_parse_modifiers_aliases() {
+    // "super" and "meta" are valid aliases for CMD
+    assert_eq!(parse_modifiers("super").unwrap(), Modifiers::CMD);
+    assert_eq!(parse_modifiers("meta").unwrap(), Modifiers::CMD);
+    assert_eq!(parse_modifiers("ctrl+meta").unwrap(), Modifiers::CTRL | Modifiers::CMD);
 }
 
 #[test]

@@ -1,3 +1,4 @@
+pub mod bar_layout;
 pub mod drag;
 pub mod layout;
 pub mod navigation;

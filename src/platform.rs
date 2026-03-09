@@ -44,15 +44,11 @@ pub type CFStringRef = *const CFString;
 
 pub type WorkspaceId = u64;
 
-bitflags::bitflags! {
-    #[derive(Debug, Clone, Copy, PartialEq)]
-    pub struct Modifiers: u8 {
-        const ALT     = 1 << 0;
-        const SHIFT   = 1 << 1;
-        const CMD     = 1 << 2;
-        const CTRL    = 1 << 3;
-    }
-}
+/// Re-export awase's `Modifiers` as the canonical modifier type.
+///
+/// All keybinding code (config parsing, CGEventTap handling, find_keybind)
+/// uses this single type. No duplication — awase is the source of truth.
+pub use awase::Modifiers;
 
 /// Type alias for the callback function signature used by `AXObserver`.
 ///

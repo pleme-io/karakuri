@@ -29,8 +29,8 @@ use crate::manager::{
 use crate::overlay::OverlayManager;
 use crate::platform::{PlatformCallbacks, WinID};
 use crate::plugins::{
-    AppLifecyclePlugin, ClipboardPlugin, DisplayPlugin, HotkeyPlugin, MenuBarPlugin,
-    NotificationPlugin, ScriptingPlugin, SnapshotPlugin, WindowPlugin,
+    AppLifecyclePlugin, ClipboardPlugin, DisplayPlugin, HotkeyPlugin,
+    NotificationPlugin, ScriptingPlugin, SnapshotPlugin, StatusBarPlugin, WindowPlugin,
 };
 
 pub mod params;
@@ -289,15 +289,18 @@ pub fn setup_bevy_app(
             ScriptingPlugin::new(),
             ClipboardPlugin,
             NotificationPlugin,
-            MenuBarPlugin,
+            StatusBarPlugin,
             SnapshotPlugin,
         ));
 
     let mut platform_callbacks = PlatformCallbacks::new(sender)?;
     platform_callbacks.setup_handlers()?;
     let overlay_manager = OverlayManager::new(platform_callbacks.main_thread_marker);
+    let status_bar_window =
+        crate::plugins::status_bar::window::StatusBarWindow::new(platform_callbacks.main_thread_marker);
     app.insert_non_send_resource(platform_callbacks);
     app.insert_non_send_resource(overlay_manager);
+    app.insert_non_send_resource(status_bar_window);
     app.insert_non_send_resource(receiver);
 
     Ok((app, shared_state))

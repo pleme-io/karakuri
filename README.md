@@ -1,8 +1,8 @@
 # Ayatsuri
 
-A programmable macOS tiling window manager built on the Bevy ECS game engine. Ayatsuri arranges windows on a per-monitor infinite horizontal strip with support for vertical stacking, animated transitions, touchpad gestures, and full Rhai scripting. It also exposes an MCP server for live state inspection and command dispatch from Claude Code.
+A programmable macOS window manager and status bar built on the Bevy ECS game engine. Ayatsuri arranges windows on a per-monitor infinite horizontal strip with support for vertical stacking, animated transitions, touchpad gestures, and full Rhai scripting. It includes a built-in status bar with customizable widgets, event-driven updates, and popup menus — replacing tools like SketchyBar with a unified Rust-native solution. An MCP server provides live state inspection and command dispatch from Claude Code.
 
-Forked from [Paneru](https://github.com/karinushka/paneru), Ayatsuri retains the infinite-strip layout model while adding a scripting layer, a plugin architecture, and an MCP integration.
+Forked from [Paneru](https://github.com/karinushka/paneru), Ayatsuri retains the infinite-strip layout model while adding a scripting layer, a plugin architecture, an MCP integration, and a GPU-ready status bar.
 
 ## Architecture
 
@@ -37,19 +37,33 @@ An `InteractionMode` FSM (Idle, Dragging, Swiping, MissionControl) gates system 
 
 ## Features
 
+### Window Management
 - **Sliding tiling layout** -- windows arranged on an infinite horizontal strip per monitor
 - **Vertical stacking** -- stack multiple windows in a single column with equal-height distribution
-- **Rhai scripting** -- programmable hotkeys, event callbacks, and automation via `~/.config/ayatsuri/scripts/*.rhai`
-- **Bevy plugin architecture** -- modular plugins for clipboard, notifications, menu bar, overlays, and snapshots
-- **MCP server** -- live ECS state inspection and command dispatch for Claude Code (`ayatsuri mcp`)
 - **Focus follows mouse** -- optional mouse-driven focus tracking
 - **Touchpad gestures** -- four-finger swipe to scroll the window strip
 - **Spring-physics animation** -- critically-damped harmonic oscillator with mid-flight retargeting and instant-snap fallback
 - **Window border overlays** -- colored borders and dim-inactive overlays via native Cocoa windows
 - **Edge-snap drag preview** -- visual snap zones during window dragging
-- **Hot-reload** -- configuration and scripts reload automatically without restart
 - **Multi-display** -- independent window strips per monitor with directional focus/swap across displays
 - **Fullscreen integration** -- navigate into and out of native macOS fullscreen windows
+
+### Status Bar
+- **Built-in status bar** -- customizable macOS menu bar replacement rendered with CoreGraphics
+- **Item types** -- standard items, workspace indicators, graphs, sliders, brackets, native aliases
+- **Five positions** -- left, center, right, left-of-notch, right-of-notch
+- **Event-driven** -- items subscribe to system events (volume, brightness, power, wifi, media, space change)
+- **Script plugins** -- shell scripts with environment variables ($NAME, $SENDER, $INFO, $BUTTON)
+- **Popup menus** -- child items anchored below parent, click-to-toggle
+- **Background blur** -- NSVisualEffectView vibrancy (same look as native macOS bar)
+- **Mouse interaction** -- per-item click, scroll, hover detection
+- **Animated transitions** -- spring physics for item position/color/opacity changes
+
+### Platform
+- **Rhai scripting** -- programmable hotkeys, event callbacks, and automation via `~/.config/ayatsuri/scripts/*.rhai`
+- **Bevy plugin architecture** -- modular plugins for clipboard, notifications, status bar, overlays, and snapshots
+- **MCP server** -- live ECS state inspection and command dispatch for Claude Code (`ayatsuri mcp`)
+- **Hot-reload** -- configuration and scripts reload automatically without restart
 - **Shell command execution** -- bind arbitrary shell commands to hotkeys via `exec` bindings
 - **Wallpaper control** -- set desktop wallpaper from config or scripts
 
@@ -182,7 +196,7 @@ Ayatsuri searches for configuration in order:
 
 Configuration changes are automatically hot-reloaded.
 
-### Key Options
+### Window Management Options
 
 | Option | Type | Description |
 |--------|------|-------------|
@@ -195,6 +209,48 @@ Configuration changes are automatically hot-reloaded.
 | `auto_center` | `bool` | Auto-center focused window |
 | `edge_padding` | `[i32; 4]` | Top, right, bottom, left padding |
 | `wallpaper` | `string` | Path to desktop wallpaper image |
+
+### Status Bar Options
+
+```yaml
+status_bar:
+  enabled: true
+  position: top
+  height: 28
+  blur_radius: 20
+  color: "0xCC1e1e2e"
+  font: "Hack Nerd Font:Regular:14.0"
+  hide_macos_menubar: true
+  items:
+    - id: spaces
+      type: space
+      position: left
+      spaces: [1, 2, 3, 4, 5]
+    - id: front_app
+      type: item
+      position: left
+      subscribe: [front_app_switched]
+    - id: clock
+      type: item
+      position: right
+      update_freq: 1
+      script: "date '+%H:%M:%S'"
+    - id: battery
+      type: item
+      position: right
+      subscribe: [power_source_change]
+    - id: cpu
+      type: graph
+      position: right
+      width: 60
+      update_freq: 2
+    - id: volume
+      type: slider
+      position: right
+      subscribe: [volume_change]
+```
+
+See [CLAUDE.md](CLAUDE.md#status-bar-srcpluginsstatus_bar) for full architecture documentation.
 
 ## Development
 
@@ -224,7 +280,7 @@ Tests are platform-independent: `pump_events` is a no-op in test mode and events
 | `src/plugins/scripting/` | Rhai scripting engine, API registration, script loader |
 | `src/plugins/clipboard.rs` | Clipboard monitoring and history |
 | `src/plugins/notification.rs` | macOS notification dispatch |
-| `src/plugins/menu_bar.rs` | Status bar item management |
+| `src/plugins/status_bar/` | Status bar rendering, layout, items, events |
 | `src/plugins/hotkey.rs` | Global hotkey registration |
 | `src/plugins/snapshot.rs` | State snapshot for MCP queries |
 | `src/overlay.rs` | Window border and dim-inactive overlay rendering |

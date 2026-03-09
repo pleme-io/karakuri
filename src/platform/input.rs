@@ -21,7 +21,6 @@ use crate::commands::Command;
 use crate::config::Config;
 use crate::errors::{Error, Result};
 use crate::events::{Event, EventSender};
-use crate::platform::Modifiers;
 
 /// Which edge of a display the cursor is stuck to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -347,23 +346,11 @@ impl InputHandler {
     ///
     /// `true` if the key press was handled and should be intercepted, `false` otherwise.
     fn handle_keypress(&self, keycode: i64, eventflags: CGEventFlags) -> bool {
-        const MODIFIER_MASKS: [(Modifiers, [u64; 3]); 4] = [
-            (Modifiers::ALT, [0x0008_0000, 0x0000_0020, 0x0000_0040]),
-            (Modifiers::SHIFT, [0x0002_0000, 0x0000_0002, 0x0000_0004]),
-            (Modifiers::CMD, [0x0010_0000, 0x0000_0008, 0x0000_0010]),
-            (Modifiers::CTRL, [0x0004_0000, 0x0000_0001, 0x0000_2000]),
-        ];
         let Some(events) = &self.events else {
             return false;
         };
 
-        let mut mask = Modifiers::empty();
-        for (modifier, masks) in MODIFIER_MASKS {
-            #[allow(clippy::manual_contains)]
-            if masks.iter().any(|&m| m == (eventflags.0 & m)) {
-                mask |= modifier;
-            }
-        }
+        let mask = awase::macos::cg_flags_to_modifiers(eventflags.0);
 
         // On a native fullscreen space, keybindings are still intercepted so
         // that ayatsuri can actively switch back to the previous workspace.
@@ -371,7 +358,7 @@ impl InputHandler {
 
         let keycode = keycode.try_into().ok();
         keycode
-            .and_then(|keycode| self.config.find_keybind(keycode, &mask))
+            .and_then(|keycode| self.config.find_keybind(keycode, mask))
             .and_then(|command| {
                 // When window management is disabled, drop window commands but
                 // keep exec, quit, printstate, mode, reload, and script commands.
