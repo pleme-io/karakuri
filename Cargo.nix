@@ -944,7 +944,7 @@ rec {
         src = pkgs.fetchgit {
           url = "https://github.com/pleme-io/awase";
           rev = "fb1ae41f525ffbc82a048788b6d09b5b22281174";
-          sha256 = "00arfp0lvp25j26yamr9vw5scq0axklzcxrq3c5wfl0v9v655swq";
+          sha256 = "16syj0yd9mi39ild9fwd6nhwqcqwvkzz1m9c3g2qlc95fn8z41qq";
         };
         dependencies = [
           {
