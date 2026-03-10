@@ -3,89 +3,79 @@
 
   inputs = {
     nixpkgs.url = "github:nixos/nixpkgs?ref=nixos-unstable";
+    crate2nix.url = "github:nix-community/crate2nix";
+    flake-utils.url = "github:numtide/flake-utils";
     substrate = {
       url = "github:pleme-io/substrate";
       inputs.nixpkgs.follows = "nixpkgs";
     };
-    devenv = {
-      url = "github:cachix/devenv";
-      inputs.nixpkgs.follows = "nixpkgs";
-    };
   };
 
-  outputs =
-    {
-      self,
-      nixpkgs,
-      substrate,
-      ...
-    }:
-    let
-      system = "aarch64-darwin";
+  outputs = {
+    self,
+    nixpkgs,
+    crate2nix,
+    flake-utils,
+    substrate,
+    ...
+  }: let
+    # Ayatsuri is macOS-only (uses Accessibility API, CGEventTap, etc.)
+    systems = [ "aarch64-darwin" "x86_64-darwin" ];
+
+    mkPerSystem = system: let
       pkgs = import nixpkgs { inherit system; };
+      darwinHelpers = import "${substrate}/lib/darwin.nix";
 
-      mkDate =
-        longDate:
-        (nixpkgs.lib.concatStringsSep "-" [
-          (builtins.substring 0 4 longDate)
-          (builtins.substring 4 2 longDate)
-          (builtins.substring 6 2 longDate)
-        ]);
-
-      props = builtins.fromTOML (builtins.readFile ./Cargo.toml);
-      version =
-        props.package.version
-        + "+date="
-        + (mkDate (self.lastModifiedDate or "19700101"))
-        + "_"
-        + (self.shortRev or "dirty");
-
-      pname = "ayatsuri";
-
-      package = pkgs.rustPlatform.buildRustPackage {
-        inherit pname version;
-        src = pkgs.lib.cleanSource ./.;
-        postPatch = ''
-          substituteInPlace build.rs --replace-fail \
-            'let sdk_dir = "/Library/Developer/CommandLineTools/SDKs";' \
-            'let sdk_dir = "${pkgs.apple-sdk}/Platforms/MacOSX.platform/Developer/SDKs";'
-        '';
-        cargoLock.lockFile = ./Cargo.lock;
-        buildInputs = [
-          pkgs.apple-sdk.privateFrameworksHook
-        ];
-
-        # Do not run tests
-        doCheck = false;
-
-        meta = {
-          mainProgram = pname;
+      project = import ./Cargo.nix {
+        inherit pkgs;
+        defaultCrateOverrides = pkgs.defaultCrateOverrides // {
+          ayatsuri = attrs: {
+            buildInputs = (attrs.buildInputs or [])
+              ++ [ pkgs.apple-sdk.privateFrameworksHook ]
+              ++ (darwinHelpers.mkDarwinBuildInputs pkgs);
+            postPatch = ''
+              substituteInPlace build.rs --replace-fail \
+                'let sdk_dir = "/Library/Developer/CommandLineTools/SDKs";' \
+                'let sdk_dir = "${pkgs.apple-sdk}/Platforms/MacOSX.platform/Developer/SDKs";'
+            '';
+          };
         };
       };
-    in
-    {
-      packages.${system} = {
-        ayatsuri = package;
+
+      package = project.rootCrate.build;
+    in {
+      packages = {
         default = package;
+        ayatsuri = package;
       };
 
-      overlays.default = final: prev: {
-        ayatsuri = self.packages.${final.system}.default;
-      };
-
-      homeManagerModules.default = import ./module {
-        hmHelpers = import "${substrate}/lib/hm-service-helpers.nix" { lib = nixpkgs.lib; };
-      };
-
-      devShells.${system}.default = pkgs.mkShellNoCC {
+      devShells.default = pkgs.mkShellNoCC {
         packages = [
-          package
           pkgs.rustc
           pkgs.cargo
           pkgs.rust-analyzer
-        ];
+          crate2nix.packages.${system}.default
+        ] ++ [ pkgs.apple-sdk.privateFrameworksHook ]
+          ++ (darwinHelpers.mkDarwinBuildInputs pkgs);
       };
 
-      formatter.${system} = pkgs.nixfmt-tree;
+      apps.default = {
+        type = "app";
+        program = "${package}/bin/ayatsuri";
+      };
+    };
+
+    flakeWrapper = import "${substrate}/lib/flake-wrapper.nix" { inherit nixpkgs; };
+  in
+    flakeWrapper.mkFlakeOutputs {
+      inherit systems mkPerSystem;
+      extraOutputs = {
+        overlays.default = final: prev: {
+          ayatsuri = (mkPerSystem final.system).packages.default;
+        };
+        homeManagerModules.default = import ./module {
+          hmHelpers = import "${substrate}/lib/hm-service-helpers.nix" { lib = nixpkgs.lib; };
+        };
+      };
     };
 }
