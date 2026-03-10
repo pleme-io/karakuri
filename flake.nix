@@ -29,6 +29,9 @@
       project = import ./Cargo.nix {
         inherit pkgs;
         defaultCrateOverrides = pkgs.defaultCrateOverrides // {
+          rmcp = attrs: {
+            CARGO_CRATE_NAME = "rmcp";
+          };
           ayatsuri = attrs: {
             buildInputs = (attrs.buildInputs or [])
               ++ [ pkgs.apple-sdk.privateFrameworksHook ]
